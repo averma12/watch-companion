@@ -41,45 +41,54 @@ in the film is ever sent to the model.
   title and year, to look up the cast (optional).
 - Your Anthropic API key is stored in the macOS Keychain, not in files.
 
-## Requirements
+## Quick start
 
-- macOS with [IINA](https://iina.io) 1.5 or later (tested with 1.5.0).
-- An [Anthropic API key](https://console.anthropic.com/).
-- Optional: [`ffmpeg`](https://ffmpeg.org) (`brew install ffmpeg`) to read subtitle tracks
-  inside the video. Not needed for `.srt`/`.vtt` files beside it.
-- Text subtitles. Image-based subtitles (PGS/VobSub) aren't supported yet; without subtitles the
-  plugin answers from the frame alone.
+You need a Mac, about five minutes, and an Anthropic API key.
 
-## Install
+1. **Install IINA** from [iina.io](https://iina.io) (or `brew install --cask iina`). Version 1.5
+   or later.
+2. **Get an API key** at [console.anthropic.com](https://console.anthropic.com/) and add a few
+   dollars of credit. The API is billed separately from a Claude.ai subscription. A question
+   costs about $0.02–0.10.
+3. **Install the plugin**, either way:
+   - Download `watch-companion-<version>.iinaplgz` from the
+     [latest release](https://github.com/averma12/watch-companion/releases/latest) and
+     double-click it; IINA asks to install it.
+   - Or in IINA: **Settings → Plugins**, install from GitHub, and paste
+     `https://github.com/averma12/watch-companion`. IINA will then offer updates by itself.
 
-In IINA's **Settings → Plugins**, choose to install a plugin from GitHub and enter
-`averma12/watch-companion`.
+   Make sure **Watch Companion** is enabled in **Settings → Plugins**.
+4. **Watch something with subtitles.** Open a film whose subtitles are a `.srt`/`.vtt` file next
+   to the video (same name) or a text track inside it. For tracks inside the video, install
+   [`ffmpeg`](https://ffmpeg.org) once: `brew install ffmpeg`.
+5. **Ask.** Press **⌘K** (or **Plugin → Show Plugins Panel**, then pick **Ask**), type a
+   question, press Enter. The first time, paste your API key when asked; it is stored in the
+   macOS Keychain.
 
-Or from a clone, for development:
+Settings (**Settings → Plugins → Watch Companion**): model (Opus 5.5 by default; Sonnet 5.5 and
+Haiku 5.5 are cheaper), effort, whether to send the frame, whether to look up the cast, and an
+optional env file to import `ANTHROPIC_API_KEY` from instead of pasting it.
 
-```bash
-/Applications/IINA.app/Contents/MacOS/iina-plugin link iina-plugin/watch-companion.iinaplugin
-```
-
-New plugins are disabled by default: enable **Watch Companion** in **Settings → Plugins**.
-
-## Use
-
-1. Open a film in IINA.
-2. Press **⌘K**, or **Plugin → Show Plugins Panel** and pick **Ask** in the panel's menu.
-3. Type a question. The first time, the plugin asks for your API key (or imports
-   `ANTHROPIC_API_KEY` from an env file you name in its preferences) and stores it in the
-   Keychain.
-
-Preferences (**Settings → Plugins → Watch Companion**): model (Opus 5.5, Sonnet 5.5, Haiku 5.5),
-effort, sending the frame on or off, the Wikipedia cast lookup on or off, and the key import
-file.
+Limits today: text subtitles only (not image-based PGS/VobSub; without subtitles it answers
+from the frame alone), English Wikipedia for the cast, and watching inside IINA (not on a TV
+yet).
 
 ## Develop
 
 ```bash
 node --test iina-plugin/test/*.test.js
 ```
+
+Link the plugin folder into IINA instead of installing a release (then enable it in
+**Settings → Plugins**; dev plugins start disabled):
+
+```bash
+/Applications/IINA.app/Contents/MacOS/iina-plugin link iina-plugin/watch-companion.iinaplugin
+```
+
+**Release:** bump `version` and `ghVersion` in `Info.json`, then push a tag like `v0.1.1`; the
+`release` workflow packs the plugin into an `.iinaplgz` and attaches it to a GitHub release,
+which is where IINA installs and updates from.
 
 Layout and the lessons learned along the way (IINA API quirks, measured latency and cost, why
 SDH tracks matter) are in [docs/DESIGN.md](docs/DESIGN.md). Agent and contributor rules are in
