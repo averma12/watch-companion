@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --fg: #1d1d1f; --muted: #6e6e73; --bg: transparent; --card: rgba(0,0,0,.05); --accent: #0a84ff; --warn: #b25000; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #f5f5f7; --muted: #a1a1a6; --card: rgba(255,255,255,.08); --warn: #ffb340; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 12px; font: 13px/1.45 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--fg); background: var(--bg);
+         display: flex; flex-direction: column; height: 100vh; }
+  #status { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
+  #log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+  .q { font-weight: 600; }
+  .q small, .meta { color: var(--muted); font-weight: 400; font-size: 11px; }
+  .a { background: var(--card); border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; }
+  .warn { color: var(--warn); }
+  a.cite { color: var(--accent); text-decoration: none; cursor: pointer; }
+  a.cite:hover { text-decoration: underline; }
+  .tag { color: var(--muted); font-size: 11px; }
+  #back { display: none; margin-bottom: 8px; }
+  button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; }
+  form { display: flex; gap: 6px; margin-top: 8px; }
+  input { flex: 1; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--muted); background: transparent; color: var(--fg); font: inherit; }
+  .empty { color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="status">Loading…</div>
+<button id="back" class="link"></button>
+<div id="log"><p class="empty">Ask about what's on screen: "who is this?", "what did she just say?",
+  "what's happened so far?". Answers use only what you've already seen. ⌘K jumps here.</p></div>
+<form id="f"><input id="q" placeholder="Ask about this scene…" autocomplete="off"><button>Ask</button></form>
+<script>
+  // The webview is a separate process: talk to the plugin only through iina.postMessage/onMessage.
+  const log = document.getElementById("log");
+  const q = document.getElementById("q");
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const add = (node) => { const empty = log.querySelector(".empty"); if (empty) empty.remove(); log.appendChild(node); log.scrollTop = log.scrollHeight; };
+  let pending = null;
+  const back = document.getElementById("back");
+  back.onclick = () => iina.postMessage("seek", { t: 0, back: true });
+
+  // Answer text with [m:ss] citations turned into links (only those the plugin validated) and
+  // [frame] / [background] shown as quiet tags.
+  const renderAnswer = (node, text, citations) => {
+    const ok = new Map((citations || []).filter((c) => c.valid).map((c) => [c.raw, c.t]));
+    for (const part of text.split(/(\[[^\]\n]{1,12}\])/)) {
+      if (ok.has(part)) {
+        const a = el("a", "cite", part);
+        a.onclick = () => iina.postMessage("seek", { t: ok.get(part) });
+        node.appendChild(a);
+      } else if (part === "[frame]" || part === "[background]") {
+        node.appendChild(el("span", "tag", part));
+      } else {
+        node.appendChild(document.createTextNode(part));
+      }
+    }
+  };
+
+  document.getElementById("f").addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (!q.value.trim() || pending) return;
+    iina.postMessage("ask", { question: q.value });
+    q.value = "";
+  });
+
+  iina.onMessage("focus", () => q.focus());
+  // Development hook (main.js devAutoAsk): fill the box and submit, as a person would.
+  iina.onMessage("dev-submit", (d) => { q.value = d.question; document.getElementById("f").requestSubmit(); });
+  iina.onMessage("status", (s) => {
+    document.getElementById("status").textContent = [s.film, s.subs, s.cast].filter(Boolean).join(" · ");
+  });
+  iina.onMessage("thinking", (d) => {
+    const box = el("div");
+    const head = el("div", "q", d.question + " "); head.appendChild(el("small", null, "at " + d.at));
+    pending = el("div", "a meta", "Thinking…");
+    box.append(head, pending); add(box);
+  });
+  iina.onMessage("answer", (d) => {
+    if (!pending) return;
+    const a = pending; pending = null;
+    a.className = "a"; a.textContent = "";
+    if (d.flagged && d.flagged.length) {
+      // The answer names someone the subtitles haven't mentioned yet: hide it until asked.
+      const note = el("div", "warn", "Hidden: this answer names someone who hasn't been mentioned yet, which may be a spoiler. ");
+      const show = el("button", "link", "Show anyway");
+      show.onclick = () => { note.remove(); const body = el("span"); renderAnswer(body, d.text, d.citations); a.prepend(body); };
+      note.appendChild(show); a.appendChild(note);
+    } else {
+      renderAnswer(a, d.text, d.citations);
+    }
+    const cost = d.cost != null ? `$${d.cost.toFixed(3)}` : "";
+    a.parentNode.appendChild(el("div", "meta", [(d.ms / 1000).toFixed(1) + " s", cost, d.cues + " lines", d.frame ? "frame" : "no frame"].filter(Boolean).join(" · ")));
+    log.scrollTop = log.scrollHeight;
+  });
+  iina.onMessage("error", (d) => {
+    const a = pending || el("div", "a"); pending = null;
+    a.className = "a warn"; a.textContent = d.message;
+    if (!a.parentNode) add(a);
+  });
+  iina.onMessage("seeked", (d) => {
+    if (d.back) { back.style.display = "none"; return; }
+    back.textContent = "← Back to " + d.returnTo;
+    back.style.display = "block";
+  });
+  iina.postMessage("ready", {});
+</script>
+</body>
+</html>

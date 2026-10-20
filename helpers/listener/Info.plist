@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.averma12.watch-companion.listener</string>
+	<key>CFBundleName</key>
+	<string>Watch Companion Listener</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Listens to the TV for a few seconds to find where you are in the film. Matching happens on this Mac; no audio is stored or sent anywhere.</string>
+</dict>
+</plist>

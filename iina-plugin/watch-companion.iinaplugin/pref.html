@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; padding: 16px; font: 13px -apple-system, BlinkMacSystemFont, sans-serif; }
+  .row { margin-bottom: 14px; }
+  .help { color: rgba(128,128,128,.9); font-size: 11px; margin-top: 3px; }
+  input[type=text] { width: 100%; }
+</style>
+</head>
+<body>
+  <div class="row">
+    Model
+    <select data-pref-key="model">
+      <option value="claude-opus-5-5">Claude Opus 5.5 (default)</option>
+      <option value="claude-sonnet-5-5">Claude Sonnet 5.5 (cheaper)</option>
+      <option value="claude-haiku-5-5">Claude Haiku 5.5 (cheapest)</option>
+    </select>
+  </div>
+  <div class="row">
+    Effort
+    <select data-pref-key="effort">
+      <option value="low">Low (fast)</option>
+      <option value="medium">Medium</option>
+      <option value="high">High</option>
+    </select>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" data-pref-key="send_frame"> Send the current frame (768 px, about $0.005 a question)</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" data-pref-key="fetch_cast"> Look up the cast on Wikipedia (names only)</label>
+  </div>
+  <div class="row">
+    Import the API key from an env file (optional)
+    <input type="text" data-pref-key="key_import_path" placeholder="/path/to/secrets.env">
+    <div class="help">If the Keychain has no key yet, the plugin reads ANTHROPIC_API_KEY from this file once and
+      stores it in the Keychain. Leave empty to be asked for the key instead.</div>
+  </div>
+</body>
+</html>

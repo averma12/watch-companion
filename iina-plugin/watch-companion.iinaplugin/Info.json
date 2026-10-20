@@ -1,0 +1,33 @@
+{
+  "name": "Watch Companion",
+  "identifier": "com.averma12.watch-companion",
+  "version": "0.1.0",
+  "description": "Ask questions about the scene you are watching. Answers come from the subtitles so far, the current frame and the cast, never from later in the film.",
+  "author": {
+    "name": "Abhinav Verma",
+    "url": "https://github.com/averma12"
+  },
+  "entry": "main.js",
+  "ghRepo": "averma12/watch-companion",
+  "ghVersion": 1,
+  "permissions": [
+    "show-osd",
+    "file-system",
+    "network-request"
+  ],
+  "allowedDomains": [
+    "api.anthropic.com",
+    "en.wikipedia.org"
+  ],
+  "sidebarTab": {
+    "name": "Ask"
+  },
+  "preferencesPage": "pref.html",
+  "preferenceDefaults": {
+    "model": "claude-opus-5-5",
+    "effort": "low",
+    "send_frame": true,
+    "fetch_cast": true,
+    "key_import_path": ""
+  }
+}

@@ -1,0 +1,12 @@
+.DS_Store
+.env
+*.iinaplgz
+node_modules/
+/helpers/listener/build/
+# never commit films, subtitles, frames or catalogs
+*.mp4
+*.mkv
+*.srt
+*.vtt
+*.shazamsignature
+*.shazamcatalog
