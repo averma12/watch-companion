@@ -11,7 +11,7 @@ const TEXT_SUB_CODECS = ["subrip", "srt", "mov_text", "ass", "ssa", "webvtt", "t
 const HISTORY = 6;  // earlier Q/A pairs sent with a follow-up
 const TVCAST = "http://127.0.0.1:8766/api";  // tvcast's panel API, when it casts this file to a TV
 const TV_POLL_MS = 3000;
-const UA = "watch-companion/0.4 (https://github.com/averma12/watch-companion)";
+const UA = "watch-companion/0.5 (https://github.com/averma12/watch-companion)";
 
 const state = { path: null, film: null, cues: [], subsFrom: "", subsTrack: null, subsLag: null, subsSync: "", cast: [], heads: [],
                 busy: false, capturing: false, history: [], lastResult: null, furthest: 0, returnTo: null };
