@@ -97,6 +97,12 @@ ShazamKit results so far (`helpers/listener`):
 | 10 s clean clips at four positions | all matched, within 5 ms |
 | Simulated TV speaker + room echo + noise, 10 s | 7 of 8 matched, within 15 ms |
 | Mac microphone, film playing from the Mac's speakers | 17 of 17 matches in 35 s; a steady ~0.3 s lag behind the player |
+| Catalog from one audio track (`catalog.sh`: ffmpeg extracts it, then `/usr/bin/shazam`) | ~87 s for 2.5 h; the same clips all match |
+| Two different tracks in one file, 8 clips each | whole-file catalog (tracks mixed): 3–6 of 8; one-track catalog: 5–8 of 8, and 0 of 8 from the other track |
+
+A file with several audio tracks (a dub next to the original) needs the catalog of the track
+that plays: `/usr/bin/shazam` signs all tracks mixed, which matches worse, and a catalog of the
+wrong language matches nothing.
 
 IINA has no microphone permission, so the listener must be its own signed binary with a
 microphone usage string, not a process the plugin starts. Not yet tested against a real TV.
