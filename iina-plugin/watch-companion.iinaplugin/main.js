@@ -8,8 +8,8 @@ const FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
 const TEXT_SUB_CODECS = ["subrip", "srt", "mov_text", "ass", "ssa", "webvtt", "text"];
 const HISTORY = 3;  // earlier Q/A pairs sent with a follow-up
 
-const state = { path: null, film: null, cues: [], subsFrom: "", cast: [], busy: false, history: [], lastResult: null,
-                furthest: 0, returnTo: null };
+const state = { path: null, film: null, cues: [], subsFrom: "", subsTrack: null, subsLag: null, subsSync: "", cast: [],
+                busy: false, history: [], lastResult: null, furthest: 0, returnTo: null };
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // Code after `await http.*` runs on the URL session thread; AppKit UI calls from there crash IINA
@@ -24,6 +24,7 @@ const position = iinaPosition;
 const status = () => toSidebar("status", {
   film: state.film ? `${state.film.title}${state.film.year ? ` (${state.film.year})` : ""}` : "",
   subs: state.cues.length ? `${state.cues.length} subtitle lines (${state.subsFrom})` : state.subsFrom || "no subtitles yet",
+  sync: state.subsSync,
   cast: state.cast.length ? `${state.cast.length} cast names` : "no cast list",
   position: `position from ${position.label}`,
 });
@@ -90,10 +91,56 @@ const loadSubtitles = async () => {
   const pick = ctx.pickContextTrack(candidates);
   if (!pick) { state.cues = []; state.subsFrom = "couldn't read the subtitles"; return; }
   state.cues = pick.cues;
+  state.subsTrack = pick.track;
   const labels = ctx.speakerLabelCount(pick.cues);
   state.subsFrom = `${trackLabel(pick.track)}${labels >= 10 ? ", with speaker names" : ""}`;
   log("subtitles", candidates.map((c) => `${c.id}: ${c.cues.length} lines, ${ctx.speakerLabelCount(c.cues)} labels`).join("; "),
     "->", pick.id, `${Date.now() - t0} ms`);
+};
+
+// Is the subtitle track in time with the audio? (lib/context.js, "subtitle timing"). Three windows
+// of up to 5 minutes each, about 4 s of ffmpeg on an M-series Mac, cached per subtitle and audio
+// track.
+const SYNC_WINDOW = 300;
+
+// `fresh` skips the cache in both directions (the dev hook's shifted subtitles must not be cached).
+const checkSubtitleSync = async (fresh) => {
+  state.subsLag = null; state.subsSync = "";
+  const ff = ffmpegPath();
+  const duration = mpv.getNumber("duration") || 0;
+  if (!ff || !state.cues.length || !state.subsTrack || duration < 60) return;
+  const audio = (mpv.getNative("track-list") || []).find((t) => t.type === "audio" && t.selected);
+  if (!audio) return;
+  const cache = `@data/sync-${safeName(state.path.split("/").pop())}-${state.subsTrack.id}-${audio.id}.json`;
+  let lag;
+  if (!fresh && file.exists(cache)) {
+    lag = JSON.parse(file.read(cache) || "{}").lag;
+  } else {
+    state.subsSync = "checking subtitle timing…"; await toMain(); status();
+    // Dialogue sits in the centre channel of 5.1/7.1; otherwise listen to the downmix.
+    const mono = (audio["demux-channel-count"] || 0) >= 3 ? "pan=mono|c0=FC" : "aformat=channel_layouts=mono";
+    const af = `${mono},highpass=f=300,lowpass=f=3000,aresample=16000,asetnsamples=n=800,` +
+      "astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-";
+    const win = Math.min(SYNC_WINDOW, duration / 4);
+    const lags = [];
+    const t0 = Date.now();
+    for (const at of [0.2, 0.5, 0.8]) {
+      const from = Math.round(duration * at);
+      const r = await utils.exec(ff, ["-v", "error", "-ss", String(from), "-t", String(win), "-i", state.path,
+        "-map", `0:${audio["ff-index"]}`, "-vn", "-af", af, "-f", "null", "-"]);
+      if (r.status !== 0) { log("sync ffmpeg", r.status, r.stderr); continue; }
+      lags.push(ctx.speechLag(ctx.parseRmsLevels(r.stdout), state.cues, from));
+    }
+    lag = ctx.agreedLag(lags);
+    log("subtitle timing", JSON.stringify(lags), "->", lag, `${Date.now() - t0} ms`);
+    if (!fresh) file.write(cache, JSON.stringify({ lag, lags }));
+  }
+  state.subsLag = lag;
+  const s = lag == null ? 0 : Math.abs(lag).toFixed(1);
+  state.subsSync = lag == null ? "couldn't check subtitle timing"
+    : ctx.cueShift({ lag }) ? `subtitles ${s} s early, moved later`
+    : lag > 1 ? `subtitles ${s} s late (answers may miss the last lines; set a subtitle delay in IINA)`
+    : "subtitles in time with the audio";
 };
 
 // --- cast from Wikipedia --------------------------------------------------------------------
@@ -151,8 +198,12 @@ const ask = async (question) => {
     if (!key) throw new Error("No API key. Set one in the plugin's preferences.");
     const model = preferences.get("model");
     const frameB64 = preferences.get("send_frame") ? await currentFrameB64() : "";
+    // Lines count from when they were on screen: the viewer's subtitle delay and a measured early
+    // track both move them later, never earlier.
+    const shift = ctx.cueShift({ subDelay: mpv.getNumber("sub-delay"), lag: state.subsLag });
+    const cues = ctx.shiftCues(state.cues, shift);
     const req = ctx.buildRequest({ model, effort: preferences.get("effort"), film: state.film, cast: state.cast,
-      cues: state.cues, now, frameB64, question, history: state.history.slice(-HISTORY) });
+      cues, now, frameB64, question, history: state.history.slice(-HISTORY) });
     const t0 = Date.now();
     const r = await http.post("https://api.anthropic.com/v1/messages",
       { headers: Object.assign({ "x-api-key": key }, req.headers), data: req.body });
@@ -163,10 +214,10 @@ const ask = async (question) => {
     if (d.stop_reason === "refusal") throw new Error("Claude declined to answer this one.");
     const text = ctx.answerText(d).replace(/\*\*([^*]+)\*\*/g, "$1");
     const flagged = ctx.unseenCastMentions(text, state.cast, req.transcript, question);
-    const citations = ctx.citationsIn(text, state.cues, now);
+    const citations = ctx.citationsIn(text, cues, now);
     state.furthest = Math.max(state.furthest, now);
     const result = { question, at: ctx.stamp(now), now, text, flagged, citations, ms, model: d.model,
-      cost: ctx.costUSD(model, d.usage), usage: d.usage, cues: req.cueCount, frame: !!frameB64 };
+      cost: ctx.costUSD(model, d.usage), usage: d.usage, cues: req.cueCount, shift, frame: !!frameB64 };
     state.history.push({ q: question, a: text });
     toSidebar("answer", result);
     state.lastResult = result;
@@ -213,18 +264,22 @@ menu.addItem(menu.item("Ask about this scene…", () => {
 event.on("mpv.file-loaded", async () => {
   state.path = mpv.getString("path");
   state.film = ctx.titleFromPath(state.path);
-  state.cues = []; state.cast = []; state.history = []; state.subsFrom = "";
+  state.cues = []; state.cast = []; state.history = []; state.subsFrom = ""; state.subsTrack = null;
+  state.subsLag = null; state.subsSync = "";
   status();
   await wait(1500);  // let mpv add external subtitle tracks
   try { await loadSubtitles(); } catch (e) { state.subsFrom = "couldn't read subtitles"; log("subs", e); }
   await toMain(); status();
   try { await loadCast(); } catch (e) { log("cast", e); }
   await toMain(); status();
+  try { await checkSubtitleSync(); } catch (e) { state.subsSync = ""; log("sync", e); }
+  await toMain(); status();
   devAutoAsk();
 });
 
 // Development hook: if @data/autoask.json exists ({"at": seconds, "questions": [...],
-// "viaSidebar": true}), seek there, ask each question, write @data/autoask-result.json, then
+// "viaSidebar": true, "subsShift": seconds}), optionally move the subtitles by subsShift and check
+// their timing again (to test the early/late handling), seek there, ask each question, write @data/autoask-result.json, then
 // delete the request file. With viaSidebar the sidebar fills its own input box and submits the
 // form, the same path as a person pressing Enter. It lets a test run without typing.
 const devAutoAsk = async () => {
@@ -232,9 +287,14 @@ const devAutoAsk = async () => {
   const job = JSON.parse(file.read("@data/autoask.json") || "{}");
   try { file.delete("@data/autoask.json"); } catch (e) { file.write("@data/autoask.json", "{}"); }
   core.pause();
+  if (job.subsShift) {
+    state.cues = ctx.shiftCues(state.cues, job.subsShift);
+    await checkSubtitleSync(true);
+    await toMain(); status();
+  }
   if (job.at) { core.seekTo(job.at); await wait(2500); }
   const results = { started: new Date().toISOString(), viaSidebar: !!job.viaSidebar, film: state.film,
-    subsFrom: state.subsFrom, cueCount: state.cues.length, cast: state.cast, answers: [] };
+    subsFrom: state.subsFrom, subsSync: state.subsSync, subsLag: state.subsLag, cueCount: state.cues.length, cast: state.cast, answers: [] };
   if (job.viaSidebar) { sidebar.show(); await wait(1500); }
   for (const q of job.questions || []) {
     if (job.viaSidebar) {

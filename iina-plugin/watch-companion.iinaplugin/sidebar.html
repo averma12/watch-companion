@@ -70,7 +70,7 @@
   // Development hook (main.js devAutoAsk): fill the box and submit, as a person would.
   iina.onMessage("dev-submit", (d) => { q.value = d.question; document.getElementById("f").requestSubmit(); });
   iina.onMessage("status", (s) => {
-    document.getElementById("status").textContent = [s.film, s.subs, s.cast, s.position].filter(Boolean).join(" · ");
+    document.getElementById("status").textContent = [s.film, s.subs, s.sync, s.cast, s.position].filter(Boolean).join(" · ");
   });
   iina.onMessage("thinking", (d) => {
     const box = el("div");

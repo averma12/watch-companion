@@ -35,6 +35,13 @@ tokens, at 51 minutes about 1,000 lines. No retrieval index is needed for a sing
 5. **Citations can't jump ahead.** A cited time becomes a link only if a subtitle line starts
    within 1.5 s of it and it isn't after the position you asked from; seeking is clamped to that
    position too.
+6. **Subtitle timing.** A subtitle file made for another release can run seconds early, which
+   would let unheard lines past the fence. When a film opens, ffmpeg measures speech energy in
+   the centre channel every 50 ms over three windows of up to 5 minutes, and each window is
+   matched against "a line is on screen" at lags up to ±30 s. If at least two windows agree that
+   the subtitles run more than 1 s early, lines are moved later by that much. The viewer's own
+   subtitle delay in IINA moves them later too. Lines are never moved earlier: subtitles that run
+   late only cost the last few seconds, and the sidebar says so.
 
 Probes like "who else is in this movie?" and "is <character> in this film?" early in a film
 named only people already seen and declined to say who appears later.
@@ -63,6 +70,7 @@ and cached.
 | Cost per answer | ~$0.02 at 10 min; ~$0.10 at 51 min with a long answer |
 | Effort low vs medium | same latency, similar answers (two samples) |
 | Wikipedia cast lookup (3 requests) | ~2.7 s, cached per film |
+| Subtitle timing check (3 × 5 min of E-AC-3 5.1) | ~4 s per film, cached; an in-sync track measures −0.3 to 0 s, and a track shifted by +5, −3 or +12 s measures the shift within 0.3 s |
 | Frame | mpv `screenshot-to-file … video` is already tone-mapped for HDR10; `sips` makes the 768 px JPEG. The JPEG looks dimmer than the screen (open issue) |
 
 ## IINA plugin API lessons

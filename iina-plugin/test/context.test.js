@@ -164,3 +164,60 @@ test("spoiler guard holds for any position source", async () => {
     for (const c of ctx.citationsIn("[10:00] [12:00]", cues, now)) assert.equal(c.valid, c.t <= s);
   }
 });
+
+// Speech energy (dB per 50 ms frame) that is loud while `speech` cues are spoken, with noise.
+const fakeLevels = (speech, from, seconds, seed = 7) => {
+  let x = seed;
+  const rnd = () => ((x = (x * 1103515245 + 12345) % 2147483648) / 2147483648);
+  return Array.from({ length: Math.round(seconds / 0.05) }, (_, i) => {
+    const t = from + i * 0.05;
+    return (speech.some((c) => c.start <= t && t < c.end) ? -25 : -45) + rnd() * 12;
+  });
+};
+const speechCues = (from, seconds) => {
+  const out = [];
+  for (let t = from + 1, i = 0; t < from + seconds; i++) { const len = 1 + (i * 7 % 5) * 0.6; out.push({ start: t, end: t + len, text: `l${i}` }); t += len + 0.5 + (i * 3 % 4); }
+  return out;
+};
+
+test("parseRmsLevels reads ffmpeg's ametadata output", () => {
+  const out = "frame:0    pts:0       pts_time:0\nlavfi.astats.Overall.RMS_level=-27.917275\n" +
+    "frame:1    pts:800     pts_time:0.05\nlavfi.astats.Overall.RMS_level=-inf\n";
+  assert.deepEqual(ctx.parseRmsLevels(out), [-27.917275, -120]);
+});
+
+test("speechLag finds how far the subtitles are off", () => {
+  const from = 1000, speech = speechCues(from - 40, 380);
+  for (const shift of [0, 4.7, -3.2, 12]) {
+    const subs = ctx.shiftCues(speech, shift);
+    const r = ctx.speechLag(fakeLevels(speech, from, 300), subs, from);
+    assert.ok(Math.abs(r.lag - shift) <= 0.1, `shift ${shift} -> ${r.lag}`);
+  }
+  assert.equal(ctx.speechLag([-30], speech, from), null);
+  assert.equal(ctx.speechLag([-30, -30, -30], speech, from), null);
+});
+
+test("agreedLag needs two windows to agree", () => {
+  assert.equal(ctx.agreedLag([{ lag: -0.3 }, { lag: -0.3 }, { lag: -0.2 }]), -0.3);
+  assert.equal(ctx.agreedLag([{ lag: 4.7 }, null, { lag: 4.8 }]), 4.8);
+  assert.equal(ctx.agreedLag([{ lag: -5 }, { lag: 2 }, { lag: 9 }]), null);
+  assert.equal(ctx.agreedLag([{ lag: 1 }]), null);
+});
+
+test("cueShift moves lines later, never earlier", () => {
+  assert.equal(ctx.cueShift({}), 0);
+  assert.equal(ctx.cueShift({ lag: -0.3 }), 0);         // in time
+  assert.equal(ctx.cueShift({ lag: -4.7 }), 4.7);       // early: move later
+  assert.equal(ctx.cueShift({ lag: 4.7 }), 0);          // late: leave, never move earlier
+  assert.equal(ctx.cueShift({ subDelay: 2 }), 2);       // the viewer's subtitle delay
+  assert.equal(ctx.cueShift({ subDelay: -2 }), 0);
+  assert.equal(ctx.cueShift({ subDelay: 2, lag: -4.7 }), 4.7);
+  assert.equal(ctx.cueShift({ subDelay: NaN, lag: null }), 0);
+});
+
+test("spoiler guard with subtitles that run early", () => {
+  const cues = ctx.parseSubs(SRT).map((c) => ({ ...c, start: c.start - 5, end: c.end - 5 }));  // 5 s early
+  const shifted = ctx.shiftCues(cues, ctx.cueShift({ lag: -5 }));
+  const sent = JSON.stringify(ctx.buildRequest({ model: "claude-opus-5-5", effort: "low", cues: shifted, now: 598, question: "?" }).body);
+  assert.ok(!sent.includes("Owen Hale is the Warden."));  // spoken at 600, early file says 595
+});
