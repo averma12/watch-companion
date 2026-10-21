@@ -29,6 +29,10 @@ in the film is ever sent to the model.
   article: actor and character names only; the descriptions (which carry plot) are dropped. If
   an answer names a cast member who hasn't been mentioned yet, it is hidden behind
   "Show anyway".
+- **Subtitles in time with the audio.** When a film opens, the plugin checks the subtitle track
+  against the dialogue in the audio (about 4 s, once per file). If the subtitles run early,
+  lines are counted from when they are spoken, so a line you haven't heard yet can't slip in.
+  Your subtitle delay in IINA is followed too. Lines are never moved earlier.
 - **Subtitles from anywhere in the file.** A `.srt`/`.vtt` beside the video, or a text track
   inside it (read once with `ffmpeg` and cached).
 - **Cost shown per answer.** Typically $0.02–0.10 with Claude Opus 5.5, depending on how far
@@ -98,13 +102,14 @@ SDH tracks matter) are in [docs/DESIGN.md](docs/DESIGN.md). Agent and contributo
 `{"at": 600, "viaSidebar": true, "questions": ["Who is on screen right now?"]}` to
 `~/Library/Application Support/com.colliderli.iina/plugins/.data/com.averma12.watch-companion/autoask.json`
 and open a film: the plugin seeks to 10:00, asks through its own sidebar form, writes
-`autoask-result.json` and deletes the request. Each question costs real API money.
+`autoask-result.json` and deletes the request. Each question costs real API money. Add
+`"subsShift": -5` to move the subtitles 5 s early first, to test the timing check.
 
 ## Roadmap
 
 - **Watching on a TV.** Find the position when the film plays on the TV instead of in IINA:
   from the casting tool, or by listening with ShazamKit against a catalog built from the film's
-  own audio (prototype in [helpers/listener](helpers/listener); first measurements in
+  audio track that plays (prototype in [helpers/listener](helpers/listener); first measurements in
   [docs/DESIGN.md](docs/DESIGN.md)). Ask from a phone page instead of the Mac's sidebar.
 - **Spoiler-safe web search** for background questions (the actor's other films, the comics),
   limited to pages published before the film's release.
