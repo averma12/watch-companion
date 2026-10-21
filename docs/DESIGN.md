@@ -6,22 +6,65 @@ Apple M4 Pro with IINA 1.5.0 and a 2.5-hour 4K HDR10 film with English subtitles
 ## The request
 
 Everything the model sees is built by `buildRequest()` in
-`iina-plugin/watch-companion.iinaplugin/lib/context.js`:
+`iina-plugin/watch-companion.iinaplugin/lib/context.js`, in an order that keeps the start of the
+request the same from one call to the next, so the API can cache it:
 
-1. title, year and the current position;
-2. the cast as "actor as character" lines (from Wikipedia, names only);
-3. every subtitle line that has started by now, each with its time (`[22:59] …`);
-4. the current frame as a 768 px JPEG (optional);
-5. up to six earlier questions and answers from this chat;
-6. the question.
+1. title and year;
+2. the cast as "actor as character" lines, each followed by the actor's photo (256 px, the lead
+   image of their Wikipedia article); cache breakpoint;
+3. the subtitle lines that have started by now, in 10-minute blocks with their times
+   (`[22:59] …`); a block that has ended never changes, and the last ended block carries the
+   second cache breakpoint;
+4. the characters established so far (below);
+5. the current position and the current frame as a 768 px JPEG (optional);
+6. up to six earlier questions and answers from this chat (questions only);
+7. the question, or "X-Ray: who is in this scene?".
 
-The system prompt asks for plain-text answers of two to four sentences, citations for subtitle
-claims (`[m:ss]`, `[frame]`, `[background]`), outside knowledge only as tagged background and
-never about this film's plot, and no assumption that an unlabelled line belongs to the main
-character.
+One system prompt covers both questions and the X-Ray: it asks for plain-text answers of two to
+four sentences, citations for subtitle claims (`[m:ss]`, `[frame]`, `[background]`), outside
+knowledge only as tagged background and never about this film's plot, faces matched against the
+actor photos, and no assumption that an unlabelled line belongs to the main character. The
+X-Ray adds a JSON schema (`output_config.format`) for its cards.
 
 A film's subtitles up to the current position fit easily: at 10 minutes about 3,300 input
-tokens, at 51 minutes about 1,000 lines. No retrieval index is needed for a single film.
+tokens, at 1:40 about 45,000. No retrieval index is needed for a single film.
+
+**Caching, measured.** At 10:00, an X-Ray wrote 7,355 tokens to the cache ($0.047), and a second
+X-Ray read them back ($0.013). A question after an X-Ray did not read the X-Ray's entry: the JSON
+schema is rendered ahead of the content, so questions and X-Rays keep separate entries. The cache
+lives five minutes, so an isolated call pays the 1.25x write on its prefix for nothing; follow-ups
+within five minutes cost about a third.
+
+## Who the film has established: the character registry
+
+`characterRegistry()` reads only the subtitles up to now. SDH speaker labels (`NORA:`) say who
+spoke and when; names said in the dialogue say who was mentioned. Labels map to cast entries by
+any of their names, short ones included (`TJ` for Theodore "TJ" Okafor, in the tests' made-up
+cast). A surname two cast members share (Nora Vance and May Vance) counts for neither. A label
+outside the cast list counts once it has two lines, so one-off roles (`LANDLORD`) drop out while
+minor characters stay, spelled as the dialogue spells them (`DEWITT:` becomes "DeWitt"). Each entry carries what the character has been called, when they
+first appeared, how many labelled lines they have, and whether they spoke or were named in the last
+two minutes.
+
+On the test film at 45:52 the registry listed ten characters, three of them outside Wikipedia's
+nine-person cast list, and one cast member as "in the last two minutes" from being named in the
+dialogue before any line of theirs had a label.
+
+## X-Ray
+
+The X-Ray is one call with the same context and a JSON schema: for each person in the scene, the
+character, the actor, whether they are in the frame or speaking, a confidence, and one or two
+sentences on what the film has shown so far, with citations. What can come from data does:
+`xrayPeople()` adds the photo, the "first seen" time from the registry (never after now), and
+checks each citation against the subtitles. As on streaming services, a visible cast member is
+named even before the film names the character (the owner's choice); what is said about them
+stays fenced. Someone the model can't identify is shown as a short description with low
+confidence.
+
+Tried on the test film at four positions: the person in the frame and the two speaking off it,
+including a character using a false name; two named characters missing from the cast list,
+found from the subtitles; a hero in a full face mask, identified by the costume and the dialogue;
+and an unnamed person shown with a guess from the dialogue and low confidence.
 
 ## Spoiler defences, in layers
 
