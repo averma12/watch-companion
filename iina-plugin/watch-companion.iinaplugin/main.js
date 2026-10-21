@@ -6,10 +6,12 @@ const KC_SERVICE = "anthropic";
 const KC_NAME = "api-key";
 const FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
 const TEXT_SUB_CODECS = ["subrip", "srt", "mov_text", "ass", "ssa", "webvtt", "text"];
-const HISTORY = 3;  // earlier Q/A pairs sent with a follow-up
+const HISTORY = 6;  // earlier Q/A pairs sent with a follow-up
+const TVCAST = "http://127.0.0.1:8766/api";  // tvcast's panel API, when it casts this file to a TV
+const TV_POLL_MS = 3000;
 
 const state = { path: null, film: null, cues: [], subsFrom: "", subsTrack: null, subsLag: null, subsSync: "", cast: [],
-                busy: false, history: [], lastResult: null, furthest: 0, returnTo: null };
+                busy: false, capturing: false, history: [], lastResult: null, furthest: 0, returnTo: null };
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // Code after `await http.*` runs on the URL session thread; AppKit UI calls from there crash IINA
@@ -17,9 +19,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const toMain = () => wait(0);
 const log = (...a) => console.log("[watch-companion]", ...a);
 const toSidebar = (name, data) => { try { sidebar.postMessage(name, data); } catch (e) { log("postMessage", e); } };
-// Where the viewer is (lib/context.js, "position"). In IINA it is mpv's clock.
+// Where the viewer is (lib/context.js, "position"). In IINA it is mpv's clock; while tvcast plays
+// this file on a TV, it is the TV's position.
 const iinaPosition = { name: "iina", label: "IINA", now: () => ({ seconds: mpv.getNumber("time-pos") || 0 }) };
-const position = iinaPosition;
+let position = iinaPosition;
 
 const status = () => toSidebar("status", {
   film: state.film ? `${state.film.title}${state.film.year ? ` (${state.film.year})` : ""}` : "",
@@ -45,6 +48,56 @@ const apiKey = () => {
   if (!key) key = (utils.prompt("Paste your Anthropic API key. It is stored in the macOS Keychain.") || "").trim();
   if (key) utils.keychainWrite(KC_SERVICE, KC_NAME, key);
   return key;
+};
+
+// --- the TV, through tvcast -----------------------------------------------------------------
+
+const tvStatus = async () => {
+  try {
+    const r = await http.get(`${TVCAST}/status`);
+    if (r.statusCode !== 200) return null;
+    return typeof r.data === "string" ? JSON.parse(r.data || "{}") : r.data;
+  } catch (e) {
+    return null;  // tvcast isn't running
+  }
+};
+
+// The source for this moment: the TV while it plays (or is paused on) this file, else IINA. The
+// TV source carries the one reading taken here. Switching to the TV pauses and mutes IINA once;
+// the viewer watches the TV, and IINA only supplies frames.
+const choosePosition = async () => {
+  const reading = state.path ? ctx.tvReading(await tvStatus(), state.path) : null;
+  await toMain();
+  const next = reading ? { name: "tv", label: "TV", now: () => reading } : iinaPosition;
+  const switched = next.name !== position.name;
+  position = next;
+  if (switched) {
+    if (next.name === "tv") { core.pause(); mpv.set("mute", true); }
+    log("position from", next.label);
+    status();
+  }
+  return position;
+};
+
+const tvSeek = async (seconds) => {
+  // Without the JSON content type IINA form-encodes `data`, and tvcast answers 400.
+  const r = await http.post(`${TVCAST}/seek`, { headers: { "Content-Type": "application/json", "X-TVCast": "1" },
+    data: { seconds: Math.round(seconds) } });
+  await toMain();
+  if (r.statusCode !== 200) log("tv seek", r.statusCode, r.data);
+};
+
+// Keeps the sidebar's "position from …" current and, while the film plays on the TV, keeps IINA
+// (paused, muted) on the TV's scene, so the Mac shows what the TV shows.
+const pollTv = async () => {
+  try {
+    // Paused only while a question's frame is taken, so IINA stays on the TV's scene meanwhile.
+    if (!state.capturing) {
+      const source = await choosePosition();
+      if (source.name === "tv" && !state.capturing) followTv(source.now().seconds);
+    }
+  } catch (e) { log("tv poll", e); }
+  setTimeout(pollTv, TV_POLL_MS);
 };
 
 // --- subtitles ------------------------------------------------------------------------------
@@ -172,7 +225,26 @@ const loadCast = async () => {
 
 // --- the current frame ----------------------------------------------------------------------
 
-const currentFrameB64 = async () => {
+// The frame at `seconds`. When the film plays on the TV, IINA (paused) first moves to the TV's
+// position, exactly, so the frame is the one on the TV.
+const seekIinaTo = async (seconds) => {
+  const off = () => Math.abs((mpv.getNumber("time-pos") || 0) - seconds);
+  if (off() < 0.5) return;
+  mpv.command("seek", [String(seconds), "absolute+exact"]);
+  for (let i = 0; i < 60 && (mpv.getFlag("seeking") || off() >= 0.5); i++) await wait(50);
+};
+
+const followTv = (seconds) => {
+  if (Math.abs((mpv.getNumber("time-pos") || 0) - seconds) > 2) mpv.command("seek", [String(seconds), "absolute+exact"]);
+};
+
+const currentFrameB64 = async (seconds) => {
+  state.capturing = true;
+  try { return await frameAt(seconds); } finally { state.capturing = false; }
+};
+
+const frameAt = async (seconds) => {
+  if (position.name === "tv") await seekIinaTo(seconds);
   const png = utils.resolvePath("@data/frame.png");
   const jpg = utils.resolvePath("@data/frame.jpg");
   // mpv's screenshot is already tone-mapped for HDR; sips makes a 768 px JPEG.
@@ -191,13 +263,14 @@ const ask = async (question) => {
   state.busy = true;
   try {
     // One reading per question: the cutoff, the citations and the seek clamp all use this `now`.
-    const now = await ctx.positionNow(position);
+    const source = await choosePosition();
+    const now = await ctx.positionNow(source);
     await toMain();  // a source may use http
     toSidebar("thinking", { question, at: ctx.stamp(now) });
     const key = apiKey();
     if (!key) throw new Error("No API key. Set one in the plugin's preferences.");
     const model = preferences.get("model");
-    const frameB64 = preferences.get("send_frame") ? await currentFrameB64() : "";
+    const frameB64 = preferences.get("send_frame") ? await currentFrameB64(now) : "";
     // Lines count from when they were on screen: the viewer's subtitle delay and a measured early
     // track both move them later, never earlier.
     const shift = ctx.cueShift({ subDelay: mpv.getNumber("sub-delay"), lag: state.subsLag });
@@ -217,7 +290,8 @@ const ask = async (question) => {
     const citations = ctx.citationsIn(text, cues, now);
     state.furthest = Math.max(state.furthest, now);
     const result = { question, at: ctx.stamp(now), now, text, flagged, citations, ms, model: d.model,
-      cost: ctx.costUSD(model, d.usage), usage: d.usage, cues: req.cueCount, shift, frame: !!frameB64 };
+      cost: ctx.costUSD(model, d.usage), usage: d.usage, cues: req.cueCount, shift, frame: !!frameB64,
+      source: source.name };
     state.history.push({ q: question, a: text });
     toSidebar("answer", result);
     state.lastResult = result;
@@ -238,22 +312,28 @@ event.on("iina.window-loaded", () => {
   sidebar.loadFile("sidebar.html");
   sidebar.onMessage("ready", () => status());
   sidebar.onMessage("ask", (d) => { ask(d && d.question); });
-  // Clicking a citation jumps back to that subtitle line; "back" returns to where the viewer was.
-  // Never seek past the furthest point the viewer has asked from (no spoilers by seeking).
-  sidebar.onMessage("seek", (d) => {
+  // Clicking a citation jumps back to that subtitle line, on the TV when the film plays there;
+  // "back" returns to where the viewer was. Never seek past the furthest point the viewer has
+  // asked from (no spoilers by seeking).
+  const seekTo = (t) => (position.name === "tv" ? tvSeek(t) : core.seekTo(t));
+  sidebar.onMessage("seek", async (d) => {
     if (!d || typeof d.t !== "number") return;
     if (d.back) {
       if (state.returnTo == null) return;
-      core.seekTo(state.returnTo);
+      await seekTo(state.returnTo);
       state.returnTo = null;
       toSidebar("seeked", { back: true });
       return;
     }
     const t = Math.min(d.t, state.furthest);
-    if (state.returnTo == null) state.returnTo = mpv.getNumber("time-pos") || state.furthest;
-    core.seekTo(Math.max(0, t - 1));
+    if (state.returnTo == null) {
+      const reading = await (await choosePosition()).now();
+      state.returnTo = (reading && reading.seconds) || state.furthest;
+    }
+    await seekTo(Math.max(0, t - 1));
     toSidebar("seeked", { to: ctx.stamp(t), returnTo: ctx.stamp(state.returnTo) });
   });
+  setTimeout(pollTv, TV_POLL_MS);
 });
 
 menu.addItem(menu.item("Ask about this scene…", () => {
@@ -265,7 +345,7 @@ event.on("mpv.file-loaded", async () => {
   state.path = mpv.getString("path");
   state.film = ctx.titleFromPath(state.path);
   state.cues = []; state.cast = []; state.history = []; state.subsFrom = ""; state.subsTrack = null;
-  state.subsLag = null; state.subsSync = "";
+  state.subsLag = null; state.subsSync = ""; position = iinaPosition;
   status();
   await wait(1500);  // let mpv add external subtitle tracks
   try { await loadSubtitles(); } catch (e) { state.subsFrom = "couldn't read subtitles"; log("subs", e); }

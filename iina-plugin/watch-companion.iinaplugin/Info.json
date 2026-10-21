@@ -17,7 +17,8 @@
   ],
   "allowedDomains": [
     "api.anthropic.com",
-    "en.wikipedia.org"
+    "en.wikipedia.org",
+    "127.0.0.1"
   ],
   "sidebarTab": {
     "name": "Ask"

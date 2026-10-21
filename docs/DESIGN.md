@@ -12,7 +12,7 @@ Everything the model sees is built by `buildRequest()` in
 2. the cast as "actor as character" lines (from Wikipedia, names only);
 3. every subtitle line that has started by now, each with its time (`[22:59] …`);
 4. the current frame as a 768 px JPEG (optional);
-5. up to three earlier questions and answers from this chat;
+5. up to six earlier questions and answers from this chat;
 6. the question.
 
 The system prompt asks for plain-text answers of two to four sentences, citations for subtitle
@@ -90,12 +90,27 @@ and cached.
   `iina.window-loaded`.
 - New dev plugins are disabled until enabled in Settings → Plugins.
 
-## Watching on a TV (experimental)
+## Watching on a TV
 
 When the film plays on a TV, IINA can't tell the position. Options, in order of preference:
 the casting tool's reported position; listening with ShazamKit against a catalog made from the
 film's own file; for streaming apps with no local file, the viewer typing the time once, with a
 clock running from there.
+
+**Built: tvcast's position.** The plugin polls tvcast's panel API (`GET
+http://127.0.0.1:8766/api/status`) every 3 s. When `now.file` is the file open in IINA and the
+TV is playing or paused, the position comes from `tv.position` (`tvReading()` in
+`lib/context.js`), and the sidebar says "position from TV". On the switch the plugin pauses and
+mutes IINA once, then keeps it on the TV's scene (an exact seek whenever it is more than 2 s
+off). Before a question's frame, IINA seeks exactly to the position the question uses. Citation
+clicks go to the TV (`POST /api/seek` with `X-TVCast: 1` and a JSON content type; without the
+content type IINA form-encodes the body and tvcast answers 400).
+
+Measured on one TV (DLNA, subtitles burned in, HLS stream), against the TV's own audio heard by
+the Mac's microphone through `helpers/listener`: tvcast's position minus the heard position over
+150 s, median −0.09 s, range −0.65 to +0.37 s (31 matches; tvcast reports whole seconds).
+Pauses, plays and seeks from the TV's remote showed up within one poll. The frame IINA took at
+the TV's position was the same frame as one taken from the file at that time.
 
 ShazamKit results so far (`helpers/listener`):
 

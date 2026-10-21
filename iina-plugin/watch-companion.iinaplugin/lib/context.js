@@ -119,9 +119,9 @@ const shiftCues = (cues, by) => (by ? cues.map((c) => ({ ...c, start: c.start + 
 // --- position --------------------------------------------------------------------------------
 
 // Where the viewer is comes from a position source: { name, label, now() }, where now() returns
-// (or resolves to) { seconds }. In IINA that is mpv's clock; when the film plays on a TV it will be
-// the casting tool or listening. The subtitle cutoff, the citations and the seek clamp all take
-// their time from one reading per question, never from the player directly.
+// (or resolves to) { seconds }. In IINA that is mpv's clock; when the file is cast to a TV it is
+// tvcast (below). The subtitle cutoff, the citations and the seek clamp all take their time from
+// one reading per question, never from the player directly.
 // A reading that isn't a usable time is an error, not 0 or a guess.
 const positionNow = async (source) => {
   const reading = await source.now();
@@ -130,6 +130,19 @@ const positionNow = async (source) => {
     throw new Error(`Couldn't tell where you are in the film (position from ${source.label}).`);
   }
   return s;
+};
+
+// When the same file is cast to a TV with tvcast, its panel API (`/api/status`) reports what the
+// TV plays and where: `now.file` (the file name) and `tv.state` / `tv.position`. Measured against
+// the TV's own audio, that position is within tvcast's 1 s resolution, seeks included. A reading
+// counts only for the file open in IINA, while the TV plays or is paused on it. A stale reading
+// is earlier than the truth, which is the safe side.
+const TV_STATES = ["PLAYING", "PAUSED_PLAYBACK"];
+const tvReading = (status, path) => {
+  const now = status && status.now, tv = status && status.tv;
+  if (!now || !tv || !path || now.file !== path.split("/").pop()) return null;
+  if (!TV_STATES.includes(tv.state) || typeof tv.position !== "number" || !Number.isFinite(tv.position)) return null;
+  return { seconds: tv.position, playing: tv.state === "PLAYING" };
 };
 
 // --- film and cast -------------------------------------------------------------------------
@@ -263,6 +276,6 @@ const answerText = (data) => ((data && data.content) || [])
 
 module.exports = {
   parseSubs, cuesUpTo, speakerLabelCount, pickContextTrack, stamp, transcriptOf, parseRmsLevels, speechLag, agreedLag,
-  cueShift, shiftCues, positionNow, titleFromPath, castFromWikitext, namesOf,
+  cueShift, shiftCues, positionNow, tvReading, titleFromPath, castFromWikitext, namesOf,
   unseenCastMentions, buildRequest, citationsIn, parseStamp, costUSD, answerText, PRICES, SYSTEM,
 };
