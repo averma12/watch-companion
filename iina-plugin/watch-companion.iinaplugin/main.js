@@ -2,8 +2,10 @@
 const { core, mpv, event, file, utils, http, sidebar, menu, preferences, console } = iina;
 const ctx = require("./lib/context.js");
 
-const KC_SERVICE = "anthropic";
+// Keychain service per provider (the Anthropic one keeps its 0.1 name), and the env-file name.
+const KC_SERVICE = { anthropic: "anthropic", openrouter: "openrouter" };
 const KC_NAME = "api-key";
+const ENV_NAME = { anthropic: "ANTHROPIC_API_KEY", openrouter: "OPENROUTER_API_KEY" };
 const FFMPEG = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"];
 const TEXT_SUB_CODECS = ["subrip", "srt", "mov_text", "ass", "ssa", "webvtt", "text"];
 const HISTORY = 6;  // earlier Q/A pairs sent with a follow-up
@@ -35,19 +37,33 @@ const safeName = (s) => s.replace(/[^\w.-]+/g, "_").slice(0, 120);
 
 // --- API key: Keychain only -------------------------------------------------------------------
 
-const readKeyFromEnvFile = (path) => {
-  const line = (file.read(path) || "").split("\n").find((l) => /^\s*(export\s+)?ANTHROPIC_API_KEY\s*=/.test(l));
+const readKeyFromEnvFile = (path, name) => {
+  const line = (file.read(path) || "").split("\n").find((l) => new RegExp(`^\\s*(export\\s+)?${name}\\s*=`).test(l));
   return line ? line.split("=").slice(1).join("=").trim().replace(/^["']|["']$/g, "") : "";
 };
 
+// { key, provider } for this question. The "provider" preference is auto (an Anthropic key
+// first, then an OpenRouter key), anthropic or openrouter. A pasted key is stored under the
+// provider its prefix names.
 const apiKey = () => {
-  let key = utils.keychainRead(KC_SERVICE, KC_NAME);
-  if (key) return key;
+  const pref = preferences.get("provider") || "auto";
+  const order = pref === "auto" ? ["anthropic", "openrouter"] : [pref];
+  for (const provider of order) {
+    const key = utils.keychainRead(KC_SERVICE[provider], KC_NAME);
+    if (key) return { key, provider };
+  }
   const importPath = preferences.get("key_import_path");
-  if (importPath && file.exists(importPath)) key = readKeyFromEnvFile(importPath);
-  if (!key) key = (utils.prompt("Paste your Anthropic API key. It is stored in the macOS Keychain.") || "").trim();
-  if (key) utils.keychainWrite(KC_SERVICE, KC_NAME, key);
-  return key;
+  if (importPath && file.exists(importPath)) {
+    for (const provider of order) {
+      const key = readKeyFromEnvFile(importPath, ENV_NAME[provider]);
+      if (key) { utils.keychainWrite(KC_SERVICE[provider], KC_NAME, key); return { key, provider }; }
+    }
+  }
+  const key = (utils.prompt("Paste your Anthropic or OpenRouter API key. It is stored in the macOS Keychain.") || "").trim();
+  if (!key) return null;
+  const provider = ctx.providerOfKey(key);
+  utils.keychainWrite(KC_SERVICE[provider], KC_NAME, key);
+  return { key, provider };
 };
 
 // --- the TV, through tvcast -----------------------------------------------------------------
@@ -267,8 +283,8 @@ const ask = async (question) => {
     const now = await ctx.positionNow(source);
     await toMain();  // a source may use http
     toSidebar("thinking", { question, at: ctx.stamp(now) });
-    const key = apiKey();
-    if (!key) throw new Error("No API key. Set one in the plugin's preferences.");
+    const auth = apiKey();
+    if (!auth) throw new Error("No API key. Paste an Anthropic or OpenRouter key, or set an env file in the plugin's preferences.");
     const model = preferences.get("model");
     const frameB64 = preferences.get("send_frame") ? await currentFrameB64(now) : "";
     // Lines count from when they were on screen: the viewer's subtitle delay and a measured early
@@ -276,10 +292,10 @@ const ask = async (question) => {
     const shift = ctx.cueShift({ subDelay: mpv.getNumber("sub-delay"), lag: state.subsLag });
     const cues = ctx.shiftCues(state.cues, shift);
     const req = ctx.buildRequest({ model, effort: preferences.get("effort"), film: state.film, cast: state.cast,
-      cues, now, frameB64, question, history: state.history.slice(-HISTORY) });
+      cues, now, frameB64, question, history: state.history.slice(-HISTORY), provider: auth.provider });
     const t0 = Date.now();
-    const r = await http.post("https://api.anthropic.com/v1/messages",
-      { headers: Object.assign({ "x-api-key": key }, req.headers), data: req.body });
+    const r = await http.post(req.url,
+      { headers: Object.assign(ctx.PROVIDERS[auth.provider].auth(auth.key), req.headers), data: req.body });
     const ms = Date.now() - t0;
     await toMain();
     const d = typeof r.data === "string" ? JSON.parse(r.data || "{}") : (r.data || {});
@@ -291,7 +307,7 @@ const ask = async (question) => {
     state.furthest = Math.max(state.furthest, now);
     const result = { question, at: ctx.stamp(now), now, text, flagged, citations, ms, model: d.model,
       cost: ctx.costUSD(model, d.usage), usage: d.usage, cues: req.cueCount, shift, frame: !!frameB64,
-      source: source.name };
+      source: source.name, provider: auth.provider };
     state.history.push({ q: question, a: text });
     toSidebar("answer", result);
     state.lastResult = result;

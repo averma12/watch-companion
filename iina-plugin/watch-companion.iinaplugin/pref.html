@@ -19,6 +19,15 @@
     </select>
   </div>
   <div class="row">
+    Provider
+    <select data-pref-key="provider">
+      <option value="auto">Whichever key you have (Anthropic first)</option>
+      <option value="anthropic">Anthropic</option>
+      <option value="openrouter">OpenRouter</option>
+    </select>
+    <div class="help">The same Claude models, through api.anthropic.com or openrouter.ai.</div>
+  </div>
+  <div class="row">
     Effort
     <select data-pref-key="effort">
       <option value="low">Low (fast)</option>
@@ -35,8 +44,8 @@
   <div class="row">
     Import the API key from an env file (optional)
     <input type="text" data-pref-key="key_import_path" placeholder="/path/to/secrets.env">
-    <div class="help">If the Keychain has no key yet, the plugin reads ANTHROPIC_API_KEY from this file once and
-      stores it in the Keychain. Leave empty to be asked for the key instead.</div>
+    <div class="help">If the Keychain has no key yet, the plugin reads ANTHROPIC_API_KEY or OPENROUTER_API_KEY
+      from this file once and stores it in the Keychain. Leave empty to be asked for the key instead.</div>
   </div>
 </body>
 </html>

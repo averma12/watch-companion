@@ -47,21 +47,24 @@ in the film is ever sent to the model.
 
 ## Privacy
 
-- The video file never leaves your Mac. Sent to Anthropic: the subtitle text up to now, one
+- The video file never leaves your Mac. Sent to Anthropic (or OpenRouter, if you use an
+  OpenRouter key): the subtitle text up to now, one
   downscaled frame (optional), the cast names and your question. Sent to Wikipedia: the film's
   title and year, to look up the cast (optional). On a TV, the plugin only talks to tvcast on
   your own Mac (`127.0.0.1:8766`).
-- Your Anthropic API key is stored in the macOS Keychain, not in files.
+- Your API key is stored in the macOS Keychain, not in files.
 
 ## Quick start
 
-You need a Mac, about five minutes, and an Anthropic API key.
+You need a Mac, about five minutes, and an Anthropic or OpenRouter API key.
 
 1. **Install IINA** from [iina.io](https://iina.io) (or `brew install --cask iina`). Version 1.5
    or later.
 2. **Get an API key** at [console.anthropic.com](https://console.anthropic.com/) and add a few
    dollars of credit. The API is billed separately from a Claude.ai subscription. A question
-   costs about $0.02–0.10.
+   costs about $0.02–0.10. An [OpenRouter](https://openrouter.ai/keys) key (`sk-or-…`) works
+   too: the plugin sends the same request to OpenRouter's Anthropic-compatible endpoint, with
+   the same Claude models.
 3. **Install the plugin**, either way:
    - Download `watch-companion-<version>.iinaplgz` from the
      [latest release](https://github.com/averma12/watch-companion/releases/latest) and
@@ -78,8 +81,9 @@ You need a Mac, about five minutes, and an Anthropic API key.
    macOS Keychain.
 
 Settings (**Settings → Plugins → Watch Companion**): model (Opus 5.5 by default; Sonnet 5.5 and
-Haiku 5.5 are cheaper), effort, whether to send the frame, whether to look up the cast, and an
-optional env file to import `ANTHROPIC_API_KEY` from instead of pasting it.
+Haiku 5.5 are cheaper), provider (whichever key you have, Anthropic first; or Anthropic or
+OpenRouter), effort, whether to send the frame, whether to look up the cast, and an optional env
+file to import `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` from instead of pasting it.
 
 **On a TV:** start tvcast's daemon, play the film on the TV with it (`tv open <title>`), and open
 the same file in IINA. Within a few seconds the sidebar shows "position from TV". Then ask as
