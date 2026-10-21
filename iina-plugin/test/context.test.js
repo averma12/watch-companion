@@ -243,3 +243,29 @@ test("spoiler guard with the TV as the position source", async () => {
   assert.ok(sent.includes("TJ, wait!"));
   assert.ok(!sent.includes("Owen Hale is the Warden."));
 });
+
+test("OpenRouter: same request, its URL, model names and auth, no Anthropic fallback beta", () => {
+  const cues = ctx.parseSubs(SRT);
+  const args = { model: "claude-opus-5-5", effort: "low", cues, now: 61, frameB64: "AAAA", question: "Who is this?" };
+  const a = ctx.buildRequest(args);
+  const o = ctx.buildRequest({ ...args, provider: "openrouter" });
+  assert.equal(a.url, "https://api.anthropic.com/v1/messages");
+  assert.equal(o.url, "https://openrouter.ai/api/v1/messages");
+  assert.equal(o.body.model, "anthropic/claude-opus-5.5");
+  assert.equal(o.body.fallbacks, undefined);
+  assert.equal(o.headers["anthropic-beta"], undefined);
+  assert.deepEqual(o.body.output_config, { effort: "low" });
+  assert.deepEqual(o.body.messages, a.body.messages);  // same context, so the same spoiler fence
+  assert.equal(o.body.system, a.body.system);
+  assert.deepEqual(ctx.PROVIDERS.openrouter.auth("sk-or-x"), { authorization: "Bearer sk-or-x" });
+  assert.deepEqual(ctx.PROVIDERS.anthropic.auth("sk-ant-x"), { "x-api-key": "sk-ant-x" });
+  for (const [m, id] of [["claude-sonnet-5-5", "anthropic/claude-sonnet-5.5"], ["claude-haiku-5-5", "anthropic/claude-haiku-5.5"],
+    ["claude-fable-5-1", "anthropic/claude-fable-5.1"]]) assert.equal(ctx.openRouterModel(m), id);
+});
+
+test("providerOfKey and OpenRouter's reported cost", () => {
+  assert.equal(ctx.providerOfKey("sk-or-v1-abc"), "openrouter");
+  assert.equal(ctx.providerOfKey("sk-ant-api03-abc"), "anthropic");
+  assert.equal(ctx.providerOfKey(""), "anthropic");
+  assert.equal(ctx.costUSD("claude-opus-5-5", { input_tokens: 1000, output_tokens: 100, cost: 0.0123 }), 0.0123);
+});

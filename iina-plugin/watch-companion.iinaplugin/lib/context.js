@@ -213,8 +213,19 @@ const SYSTEM =
 // Models that accept `fallbacks: "default"` (Claude Haiku 5.5 has no server-side fallback).
 const FALLBACK_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"];
 
+// The same Messages request goes to Anthropic, or to OpenRouter's Anthropic-compatible endpoint
+// with an OpenRouter key. OpenRouter names the models `anthropic/claude-opus-5.5` and does its own
+// fallback, so the Anthropic fallback beta is left out there.
+const PROVIDERS = {
+  anthropic: { url: "https://api.anthropic.com/v1/messages", auth: (key) => ({ "x-api-key": key }) },
+  openrouter: { url: "https://openrouter.ai/api/v1/messages", auth: (key) => ({ authorization: `Bearer ${key}` }) },
+};
+const openRouterModel = (model) => `anthropic/${model.replace(/-(\d+)-(\d+)$/, "-$1.$2")}`;
+// OpenRouter keys start with "sk-or-"; anything else is taken as an Anthropic key.
+const providerOfKey = (key) => (/^sk-or-/.test(key || "") ? "openrouter" : "anthropic");
+
 // Everything the model sees is built here, and only from cues up to `now`.
-const buildRequest = ({ model, effort, film, cast, cues, now, frameB64, question, history }) => {
+const buildRequest = ({ model, effort, film, cast, cues, now, frameB64, question, history, provider = "anthropic" }) => {
   const seen = cuesUpTo(cues || [], now);
   const content = [];
   const filmLine = film && film.title ? `${film.title}${film.year ? ` (${film.year})` : ""}` : "unknown";
@@ -230,14 +241,16 @@ const buildRequest = ({ model, effort, film, cast, cues, now, frameB64, question
     content.push({ type: "text", text: `Earlier in this chat:\n${history.map((h) => `Q: ${h.q}\nA: ${h.a}`).join("\n\n")}` });
   }
   content.push({ type: "text", text: question });
-  const body = { model, max_tokens: 16000, output_config: { effort }, system: SYSTEM,
-                 messages: [{ role: "user", content }] };
+  const openrouter = provider === "openrouter";
+  const body = { model: openrouter ? openRouterModel(model) : model, max_tokens: 16000, output_config: { effort },
+                 system: SYSTEM, messages: [{ role: "user", content }] };
   const headers = { "content-type": "application/json", "anthropic-version": "2023-06-01" };
-  if (FALLBACK_MODELS.includes(model)) {
+  if (!openrouter && FALLBACK_MODELS.includes(model)) {
     body.fallbacks = "default";
     headers["anthropic-beta"] = "server-side-fallback-2026-07-01";
   }
-  return { body, headers, transcript: transcriptOf(seen), cueCount: seen.length };
+  return { url: PROVIDERS[openrouter ? "openrouter" : "anthropic"].url, body, headers,
+           transcript: transcriptOf(seen), cueCount: seen.length };
 };
 
 // --- citations -----------------------------------------------------------------------------
@@ -265,7 +278,9 @@ const PRICES = {
   "claude-haiku-5-5": [0.1, 0.5],
   "claude-fable-5-1": [10, 50],
 };
+// OpenRouter reports what it charged (`usage.cost`); otherwise the list price.
 const costUSD = (model, usage) => {
+  if (usage && typeof usage.cost === "number") return usage.cost;
   const p = PRICES[model];
   if (!p || !usage) return null;
   return ((usage.input_tokens || 0) * p[0] + (usage.output_tokens || 0) * p[1]) / 1e6;
@@ -277,5 +292,5 @@ const answerText = (data) => ((data && data.content) || [])
 module.exports = {
   parseSubs, cuesUpTo, speakerLabelCount, pickContextTrack, stamp, transcriptOf, parseRmsLevels, speechLag, agreedLag,
   cueShift, shiftCues, positionNow, tvReading, titleFromPath, castFromWikitext, namesOf,
-  unseenCastMentions, buildRequest, citationsIn, parseStamp, costUSD, answerText, PRICES, SYSTEM,
+  unseenCastMentions, buildRequest, PROVIDERS, openRouterModel, providerOfKey, citationsIn, parseStamp, costUSD, answerText, PRICES, SYSTEM,
 };

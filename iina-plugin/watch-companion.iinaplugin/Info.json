@@ -17,6 +17,7 @@
   ],
   "allowedDomains": [
     "api.anthropic.com",
+    "openrouter.ai",
     "en.wikipedia.org",
     "127.0.0.1"
   ],
@@ -29,6 +30,7 @@
     "effort": "low",
     "send_frame": true,
     "fetch_cast": true,
-    "key_import_path": ""
+    "key_import_path": "",
+    "provider": "auto"
   }
 }
