@@ -54,6 +54,68 @@ const stamp = (s) => {
 
 const transcriptOf = (cues) => cues.map((c) => `[${stamp(c.start)}] ${c.text}`).join("\n");
 
+// --- subtitle timing against the audio ------------------------------------------------------
+
+// A subtitle file made for another release can be seconds off. If it runs early, lines the viewer
+// hasn't heard yet fall inside the cutoff. To check, ffmpeg measures speech energy in the centre
+// channel (where dialogue sits in 5.1) every 50 ms over a few windows, and each window is matched
+// against "a line is on screen" at lags of up to ±30 s, as ffsubsync does with speech detection.
+const SYNC_STEP = 0.05;
+const SYNC_MAX_LAG = 30;
+
+// ffmpeg's `ametadata=print` output: one "lavfi.astats.Overall.RMS_level=<dB>" per frame.
+const parseRmsLevels = (text) => [...(text || "").matchAll(/RMS_level=(-?[\d.]+|-inf)/g)]
+  .map((m) => (m[1] === "-inf" ? -120 : Number(m[1])));
+
+// The lag (seconds) at which the window's speech energy best matches the cues: a cue shown at
+// time t + lag goes with the audio at t. Negative means the subtitles run early.
+const speechLag = (levels, cues, from, step = SYNC_STEP, maxLag = SYNC_MAX_LAG) => {
+  if (levels.length < 2) return null;
+  const mean = levels.reduce((a, b) => a + b, 0) / levels.length;
+  const sd = Math.sqrt(levels.reduce((a, b) => a + (b - mean) ** 2, 0) / levels.length);
+  if (!sd) return null;
+  const e = levels.map((x) => (x - mean) / sd);
+  const lo = from - maxLag;
+  const on = new Uint8Array(Math.ceil((levels.length * step + 2 * maxLag) / step) + 2);
+  for (const c of cues) {
+    for (let k = Math.max(0, Math.ceil((c.start - lo) / step)); k < on.length && lo + k * step < c.end; k++) on[k] = 1;
+  }
+  let best = null;
+  const lags = Math.round(maxLag / step);
+  for (let j = -lags; j <= lags; j++) {
+    let s = 0, n1 = 0;
+    for (let i = 0; i < e.length; i++) { const v = on[i + j + lags]; s += e[i] * v; n1 += v; }
+    const p = n1 / e.length;
+    if (p === 0 || p === 1) continue;
+    const r = s / e.length / Math.sqrt(p * (1 - p));
+    if (!best || r > best.r) best = { lag: Math.round(j * step * 100) / 100, r };
+  }
+  return best;
+};
+
+// Windows that agree within `tol` seconds; at least two must, else the check is inconclusive
+// (a cut that differs from the subtitles' release, or a frame-rate drift, shows up this way).
+const agreedLag = (lags, tol = 0.5) => {
+  const ok = lags.filter((l) => l && Number.isFinite(l.lag)).map((l) => l.lag);
+  let group = [];
+  for (const a of ok) {
+    const g = ok.filter((b) => Math.abs(a - b) <= tol);
+    if (g.length > group.length) group = g;
+  }
+  if (group.length < 2) return null;
+  const s = group.slice().sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+};
+
+// How far to move the cues later before cutting off at `now`. The viewer's own subtitle delay
+// (mpv `sub-delay`, positive = later) says when lines were on screen; a lag measured early by
+// more than `threshold` moves them later by that much. Never earlier: a wrong correction must not
+// let an unheard line in, and lines that run late only cost the last few seconds.
+const cueShift = ({ subDelay = 0, lag = null, threshold = 1 } = {}) =>
+  Math.max(0, Number.isFinite(subDelay) ? subDelay : 0, lag != null && lag < -threshold ? -lag : 0);
+
+const shiftCues = (cues, by) => (by ? cues.map((c) => ({ ...c, start: c.start + by, end: c.end + by })) : cues);
+
 // --- position --------------------------------------------------------------------------------
 
 // Where the viewer is comes from a position source: { name, label, now() }, where now() returns
@@ -200,6 +262,7 @@ const answerText = (data) => ((data && data.content) || [])
   .filter((b) => b.type === "text").map((b) => b.text).join("").trim();
 
 module.exports = {
-  parseSubs, cuesUpTo, speakerLabelCount, pickContextTrack, stamp, transcriptOf, positionNow, titleFromPath, castFromWikitext, namesOf,
+  parseSubs, cuesUpTo, speakerLabelCount, pickContextTrack, stamp, transcriptOf, parseRmsLevels, speechLag, agreedLag,
+  cueShift, shiftCues, positionNow, titleFromPath, castFromWikitext, namesOf,
   unseenCastMentions, buildRequest, citationsIn, parseStamp, costUSD, answerText, PRICES, SYSTEM,
 };
