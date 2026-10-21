@@ -17,10 +17,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const toMain = () => wait(0);
 const log = (...a) => console.log("[watch-companion]", ...a);
 const toSidebar = (name, data) => { try { sidebar.postMessage(name, data); } catch (e) { log("postMessage", e); } };
+// Where the viewer is (lib/context.js, "position"). In IINA it is mpv's clock.
+const iinaPosition = { name: "iina", label: "IINA", now: () => ({ seconds: mpv.getNumber("time-pos") || 0 }) };
+const position = iinaPosition;
+
 const status = () => toSidebar("status", {
   film: state.film ? `${state.film.title}${state.film.year ? ` (${state.film.year})` : ""}` : "",
   subs: state.cues.length ? `${state.cues.length} subtitle lines (${state.subsFrom})` : state.subsFrom || "no subtitles yet",
   cast: state.cast.length ? `${state.cast.length} cast names` : "no cast list",
+  position: `position from ${position.label}`,
 });
 const safeName = (s) => s.replace(/[^\w.-]+/g, "_").slice(0, 120);
 
@@ -137,9 +142,11 @@ const ask = async (question) => {
   question = (question || "").trim();
   if (!question || state.busy) return null;
   state.busy = true;
-  const now = mpv.getNumber("time-pos") || 0;
-  toSidebar("thinking", { question, at: ctx.stamp(now) });
   try {
+    // One reading per question: the cutoff, the citations and the seek clamp all use this `now`.
+    const now = await ctx.positionNow(position);
+    await toMain();  // a source may use http
+    toSidebar("thinking", { question, at: ctx.stamp(now) });
     const key = apiKey();
     if (!key) throw new Error("No API key. Set one in the plugin's preferences.");
     const model = preferences.get("model");

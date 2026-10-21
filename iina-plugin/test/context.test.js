@@ -139,3 +139,28 @@ test("the prompt asks for citations and fences outside knowledge", () => {
   assert.match(ctx.SYSTEM, /\[background\]/);
   assert.match(ctx.SYSTEM, /Never use outside knowledge about this film's plot/);
 });
+
+// A position source as main.js builds one; `values` are what successive now() calls return.
+const fakeSource = (...values) => ({ name: "fake", label: "a test clock", now: () => values.shift() });
+
+test("positionNow reads sync and async sources", async () => {
+  assert.equal(await ctx.positionNow(fakeSource({ seconds: 61 })), 61);
+  assert.equal(await ctx.positionNow({ label: "async", now: async () => ({ seconds: 0 }) }), 0);
+});
+
+test("positionNow refuses a reading it can't use instead of guessing", async () => {
+  for (const bad of [null, {}, { seconds: NaN }, { seconds: -1 }, { seconds: "61" }, { seconds: Infinity }]) {
+    await assert.rejects(ctx.positionNow(fakeSource(bad)), /position from a test clock/, JSON.stringify(bad));
+  }
+});
+
+test("spoiler guard holds for any position source", async () => {
+  const cues = ctx.parseSubs(SRT);
+  for (const s of [0, 4.99, 5, 61, 599.9, 600, 721, 5000]) {
+    const now = await ctx.positionNow(fakeSource({ seconds: s }));
+    const sent = JSON.stringify(ctx.buildRequest({ model: "claude-opus-5-5", effort: "low", cues, now, question: "?" }).body);
+    assert.ok(sent.includes(`Current position: ${ctx.stamp(s)}`));
+    for (const c of cues) assert.equal(sent.includes(c.text), c.start <= s, `${c.text} at ${s}`);
+    for (const c of ctx.citationsIn("[10:00] [12:00]", cues, now)) assert.equal(c.valid, c.t <= s);
+  }
+});
