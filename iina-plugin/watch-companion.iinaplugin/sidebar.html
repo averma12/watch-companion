@@ -24,14 +24,24 @@
   form { display: flex; gap: 6px; margin-top: 8px; }
   input { flex: 1; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--muted); background: transparent; color: var(--fg); font: inherit; }
   .empty { color: var(--muted); }
+  .xray { display: flex; flex-direction: column; gap: 8px; }
+  .person { display: flex; gap: 8px; align-items: flex-start; }
+  .person .pic { width: 44px; height: 58px; flex: none; border-radius: 6px; object-fit: cover; background: var(--card);
+                 display: flex; align-items: center; justify-content: center; color: var(--muted); font-weight: 600; }
+  .person .who { font-weight: 600; }
+  .person .actor { color: var(--muted); font-weight: 400; }
+  .chip { display: inline-block; font-size: 10px; color: var(--muted); border: 1px solid var(--muted); border-radius: 8px;
+          padding: 0 5px; margin-right: 4px; }
 </style>
 </head>
 <body>
 <div id="status">Loading…</div>
 <button id="back" class="link"></button>
 <div id="log"><p class="empty">Ask about what's on screen: "who is this?", "what did she just say?",
-  "what's happened so far?". Answers use only what you've already seen. ⌘K jumps here.</p></div>
-<form id="f"><input id="q" placeholder="Ask about this scene…" autocomplete="off"><button>Ask</button></form>
+  "what's happened so far?". Answers use only what you've already seen. ⌘K jumps here.
+  X-Ray shows who is in the scene.</p></div>
+<form id="f"><input id="q" placeholder="Ask about this scene…" autocomplete="off"><button>Ask</button>
+  <button type="button" id="xr" title="Who is in this scene">X-Ray</button></form>
 <script>
   // The webview is a separate process: talk to the plugin only through iina.postMessage/onMessage.
   const log = document.getElementById("log");
@@ -66,7 +76,56 @@
     q.value = "";
   });
 
+  document.getElementById("xr").onclick = () => { if (!pending) iina.postMessage("xray", {}); };
+
+  // One X-Ray card: photo (or initials), character and actor, whether they are in the frame or
+  // speaking, what the film has shown about them so far, and when it first did (a link back there).
+  const personCard = (p) => {
+    const row = el("div", "person");
+    if (p.photo) {
+      const img = el("img", "pic"); img.src = "data:image/jpeg;base64," + p.photo; img.alt = p.actor; row.appendChild(img);
+    } else {
+      row.appendChild(el("div", "pic", (p.character || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase()));
+    }
+    const body = el("div");
+    const who = el("div", "who", p.character + (p.confidence === "low" ? " ?" : ""));
+    if (p.actor) who.appendChild(el("span", "actor", " · " + p.actor));
+    body.appendChild(who);
+    const chips = el("div");
+    if (p.in_frame) chips.appendChild(el("span", "chip", "in frame"));
+    if (p.speaking_recently) chips.appendChild(el("span", "chip", "speaking"));
+    if (p.firstSeen != null) {
+      const a = el("a", "cite", "first seen " + p.firstAt);
+      a.onclick = () => iina.postMessage("seek", { t: p.firstSeen });
+      chips.appendChild(a);
+    } else if (p.actor) {
+      chips.appendChild(el("span", "tag", "not named in the film yet"));
+    }
+    body.appendChild(chips);
+    if (p.known_so_far) { const k = el("div"); renderAnswer(k, p.known_so_far, p.citations); body.appendChild(k); }
+    row.appendChild(body);
+    return row;
+  };
+
   iina.onMessage("focus", () => q.focus());
+  iina.onMessage("dev-xray", () => document.getElementById("xr").click());
+  iina.onMessage("xray-thinking", (d) => {
+    const box = el("div");
+    const head = el("div", "q", "X-Ray "); head.appendChild(el("small", null, "at " + d.at));
+    pending = el("div", "a meta", "Looking at the scene…");
+    box.append(head, pending); add(box);
+  });
+  iina.onMessage("xray", (d) => {
+    if (!pending) return;
+    const a = pending; pending = null;
+    a.className = "a xray"; a.textContent = "";
+    if (d.scene) a.appendChild(el("div", "meta", d.scene));
+    for (const p of d.people) a.appendChild(personCard(p));
+    if (!d.people.length) a.appendChild(el("div", "meta", "Nobody identifiable in this scene."));
+    const cost = d.cost != null ? `$${d.cost.toFixed(3)}` : "";
+    a.parentNode.appendChild(el("div", "meta", [(d.ms / 1000).toFixed(1) + " s", cost, d.cues + " lines"].filter(Boolean).join(" · ")));
+    log.scrollTop = log.scrollHeight;
+  });
   // Development hook (main.js devAutoAsk): fill the box and submit, as a person would.
   iina.onMessage("dev-submit", (d) => { q.value = d.question; document.getElementById("f").requestSubmit(); });
   iina.onMessage("status", (s) => {

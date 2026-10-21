@@ -192,23 +192,134 @@ const unseenCastMentions = (answer, cast, transcript, question) => cast
   })
   .map((entry) => entry.character);
 
+// --- who the film has established so far ------------------------------------------------------
+
+// From the subtitles up to `now` only: SDH speaker labels ("NORA: …") say who spoke and when;
+// names in the dialogue say who was mentioned. It tells the model who is around in this scene,
+// so a line or a face can be put to the right person.
+const CUE_LABEL = /^[-–\s]*(?:\[[^\]]*\]\s*)?([A-Z][A-Z0-9 .'’-]{0,24}):/;
+// Labels that name a role, not a character ("MAN 2", "FEMALE REPORTER", "APP VOICE").
+const ROLE_LABEL = /\b(MAN|WOMAN|MEN|WOMEN|BOY|GIRL|GUY|GUARD|ANCHOR|NARRATOR|VOICE|REPORTER|DISPATCHER|OFFICER|COP|ALL|CROWD|ANNOUNCER|DRIVER|STUDENT|KID|PEOPLE|SOLDIER|NURSE|DOCTOR|WAITER|BOYFRIEND|GIRLFRIEND|PILOT|CASHIER|CLERK|HOST|TEACHER|PROFESSOR|AGENT|RADIO|TV|COMPUTER|SYSTEM|AUTOMATED|APP)\b|\d$/;
+const RECENT_SECONDS = 120;
+
+// Every way a cast entry can be labelled: its names plus each word of two letters or more
+// ("TJ", "Al", "Bo"), upper-cased as SDH labels are.
+const labelNames = (entry) => {
+  const out = new Set(namesOf(entry).map((n) => n.toUpperCase()));
+  for (const part of [entry.actor, ...entry.character.split("/")]) {
+    for (const w of part.replace(/"/g, " ").split(/\s+/)) if (w.length >= 2) out.add(w.toUpperCase());
+  }
+  return out;
+};
+
+// [{ character, actor, calledSoFar, lines, firstSeen, recent }], most lines first.
+const characterRegistry = (cues, cast, now) => {
+  const seen = cuesUpTo(cues || [], now);
+  cast = cast || [];
+  const people = new Map();
+  const person = (key, init) => {
+    if (!people.has(key)) people.set(key, Object.assign({ names: new Set(), lines: 0, first: Infinity, recent: false }, init));
+    return people.get(key);
+  };
+  const byLabel = new Map();
+  for (const e of cast) for (const n of labelNames(e)) if (!byLabel.has(n)) byLabel.set(n, e);
+  // A name two cast entries share ("Vance" for Nora and May) says nothing about which one.
+  const owners = new Map();
+  for (const e of cast) for (const n of namesOf(e)) owners.set(n, (owners.get(n) || 0) + 1);
+  for (const c of seen) {
+    const hit = (p, name) => {
+      p.names.add(name);
+      p.first = Math.min(p.first, c.start);
+      if (now - c.start <= RECENT_SECONDS) p.recent = true;
+    };
+    const m = c.text.match(CUE_LABEL);
+    if (m) {
+      const label = m[1].trim();
+      const entry = byLabel.get(label) || cast.find((e) => [...labelNames(e)].some((n) => n.length >= 4 && label.includes(n)));
+      if (entry || !ROLE_LABEL.test(label)) {
+        const p = person(entry ? `cast:${entry.character}` : `label:${label}`, entry ? { entry } : { label });
+        p.lines++;
+        hit(p, label);
+      }
+    }
+    const said = c.text.replace(CUE_LABEL, "");
+    for (const e of cast) {
+      for (const n of namesOf(e)) {
+        if (n !== e.actor && owners.get(n) === 1 && mentions(said, n)) hit(person(`cast:${e.character}`, { entry: e }), n);
+      }
+    }
+  }
+  // A label outside the cast list counts once it has two lines; one-off labels are roles
+  // ("LANDLORD"). Its spelling comes from the dialogue when the dialogue has it ("DeWitt").
+  const spelled = (label) => {
+    const re = new RegExp(`\\b(${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})\\b`, "i");
+    for (const c of seen) {
+      const m = c.text.replace(CUE_LABEL, "").match(re);
+      if (m && m[1] !== label) return m[1];
+    }
+    return /[^A-Z ]/.test(label) ? label : label.charAt(0) + label.slice(1).toLowerCase();
+  };
+  return [...people.values()].filter((p) => p.entry || p.lines >= 2).map((p) => ({
+    character: p.entry ? p.entry.character : spelled(p.label), actor: p.entry ? p.entry.actor : "",
+    calledSoFar: [...p.names], lines: p.lines, firstSeen: p.first, recent: p.recent,
+  })).sort((a, b) => b.lines - a.lines || a.firstSeen - b.firstSeen);
+};
+
+const registryText = (registry) => registry.map((p) => `- ${p.character}${p.actor ? ` (${p.actor})` : ""}: ` +
+  `called ${p.calledSoFar.join(", ")}; first at [${stamp(p.firstSeen)}]; ${p.lines} lines with a speaker label` +
+  `${p.recent ? "; in the last two minutes" : ""}`).join("\n");
+
 // --- the request -------------------------------------------------------------------------------
 
+// Shared by questions and the X-Ray: what the model gets and the rules that keep it spoiler-free.
+const CONTEXT_RULES =
+  "You get the cast list with a photo of each actor, the characters the film has established so far " +
+  "(worked out from the subtitles' speaker labels and the names said in the dialogue), the subtitles up to " +
+  "the viewer's current position, and usually the current frame. The subtitles and the frame are everything " +
+  "the viewer has seen so far. Never reveal, hint at or guess anything that happens later. Never use " +
+  "outside knowledge about this film's plot. To tell who someone is, compare faces in the frame with the " +
+  "actor photos (a face may be older, younger, made up or partly hidden; someone in a mask or costume is " +
+  "known by the costume and the dialogue), and use the established characters and the last two minutes of " +
+  "subtitles to tell who is in the scene and who is speaking. Subtitle lines often don't say who is speaking: " +
+  "a line without a speaker label may belong to anyone in the scene, so don't give it to the main character " +
+  "by default; if it matters and you can't tell, say so. Cite subtitles inline with the time of the line in " +
+  "square brackets exactly as it appears in the transcript, for example [22:59].";
+
+// One system prompt for questions and the X-Ray, so both share the cached prefix. The X-Ray names
+// cast members who are visible even before the film names the character, as streaming services'
+// X-Ray does (the owner's choice); what it says about them stays fenced.
 const SYSTEM =
-  "You answer questions from someone watching a film or an episode, while they watch. You get the " +
-  "subtitles up to the viewer's current position, usually the current frame, and the cast list. " +
-  "The subtitles and the frame are everything the viewer has seen so far. Never reveal, hint at " +
-  "or guess anything that happens later; if the answer depends on later events, say it hasn't " +
-  "been shown yet. Use the cast list only to put names to people who are visible in the frame or " +
-  "named in the subtitles; never mention anyone else from it. Subtitle lines often don't say who " +
-  "is speaking: a line without a speaker label may belong to anyone in the scene, so don't give it " +
-  "to the main character by default; if it matters and you can't tell, say so. " +
-  "Cite your sources inline: after a statement taken from the subtitles, put the time of that line in " +
-  "square brackets exactly as it appears in the transcript, for example [22:59]; after a statement from " +
-  "the frame, put [frame]. Use outside knowledge only for background that isn't this film's story " +
-  "(earlier films, the real world, the comics), and mark it [background]. Never use outside knowledge " +
-  "about this film's plot. Answer in plain text without Markdown, in two to four sentences unless the " +
-  "viewer asks for more.";
+  "You help someone watching a film or an episode, while they watch: you answer their questions, or, when " +
+  "asked for the X-Ray, list who is in the scene. " + CONTEXT_RULES + "\n\n" +
+  "Questions: if the answer depends on later events, say it hasn't been shown yet. Use the cast list only to " +
+  "put names to people who are visible in the frame or named in the subtitles; never mention anyone else " +
+  "from it. After a statement from the frame, put [frame]. Use outside knowledge only for background that " +
+  "isn't this film's story (earlier films, the real world, the comics), and mark it [background]. Answer in " +
+  "plain text without Markdown, in two to four sentences unless the viewer asks for more.\n\n" +
+  "X-Ray: list the people in the current scene: everyone visible in the frame, and anyone speaking or spoken " +
+  "to in the last two minutes of subtitles. You may name a cast member who is visible even if the film hasn't " +
+  "named the character yet. If you can't tell who someone visible is, include them with an empty actor, the " +
+  "character as a short description (\"a woman in a yellow coat\"), and confidence low. For each person, " +
+  "known_so_far is one or two sentences on what the film has shown about this character up to now, from the " +
+  "subtitles and the frame only, with subtitle citations; leave it empty if the film has shown nothing yet. " +
+  "scene is one sentence on what is happening right now.";
+
+const XRAY_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["scene", "people"],
+  properties: {
+    scene: { type: "string" },
+    people: { type: "array", items: {
+      type: "object", additionalProperties: false,
+      required: ["character", "actor", "in_frame", "speaking_recently", "confidence", "known_so_far"],
+      properties: {
+        character: { type: "string" }, actor: { type: "string" },
+        in_frame: { type: "boolean" }, speaking_recently: { type: "boolean" },
+        confidence: { type: "string", enum: ["high", "medium", "low"] },
+        known_so_far: { type: "string" },
+      },
+    } },
+  },
+};
 
 // Models that accept `fallbacks: "default"` (Claude Haiku 5.5 has no server-side fallback).
 const FALLBACK_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"];
@@ -224,32 +335,65 @@ const openRouterModel = (model) => `anthropic/${model.replace(/-(\d+)-(\d+)$/, "
 // OpenRouter keys start with "sk-or-"; anything else is taken as an Anthropic key.
 const providerOfKey = (key) => (/^sk-or-/.test(key || "") ? "openrouter" : "anthropic");
 
-// Everything the model sees is built here, and only from cues up to `now`.
-const buildRequest = ({ model, effort, film, cast, cues, now, frameB64, question, history, provider = "anthropic" }) => {
+// Subtitles go in 10-minute blocks. A block that has ended never changes, so the request up to the
+// last ended block (after the cast and photos, which don't change during a film) is a stable
+// prefix that the API caches; only the block in progress and what follows it are new each time.
+const SUB_BLOCK = 600;
+const subtitleBlocks = (seen, now) => {
+  const blocks = [];
+  for (const c of seen) {
+    const i = Math.floor(c.start / SUB_BLOCK);
+    if (!blocks.length || blocks[blocks.length - 1].i !== i) blocks.push({ i, cues: [] });
+    blocks[blocks.length - 1].cues.push(c);
+  }
+  return blocks.map((b) => ({ ended: (b.i + 1) * SUB_BLOCK <= now,
+    text: `Subtitles ${stamp(b.i * SUB_BLOCK)}–${stamp((b.i + 1) * SUB_BLOCK)}:\n${transcriptOf(b.cues)}` }));
+};
+const cached = (block) => Object.assign(block, { cache_control: { type: "ephemeral" } });
+
+// Everything the model sees is built here, and only from cues up to `now`. `heads` are the actors'
+// photos ({ actor, b64 }); `mode` "xray" asks for the X-Ray's JSON instead of an answer.
+const buildRequest = ({ model, effort, film, cast, heads, cues, now, frameB64, question, history,
+                        provider = "anthropic", mode = "ask" }) => {
   const seen = cuesUpTo(cues || [], now);
+  const xray = mode === "xray";
   const content = [];
   const filmLine = film && film.title ? `${film.title}${film.year ? ` (${film.year})` : ""}` : "unknown";
-  content.push({ type: "text", text: `Title: ${filmLine}\nCurrent position: ${stamp(now)}` });
+  content.push({ type: "text", text: `Title: ${filmLine}` });
   if (cast && cast.length) {
-    content.push({ type: "text", text: `Cast (actor as character):\n${cast.map((c) => `${c.actor} as ${c.character}`).join("\n")}` });
+    content.push({ type: "text", text: "Cast (actor as character), with the actor's photo where there is one:" });
+    for (const c of cast) {
+      content.push({ type: "text", text: `${c.actor} as ${c.character}` });
+      const h = (heads || []).find((x) => x.actor === c.actor);
+      if (h && h.b64) content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: h.b64 } });
+    }
+    cached(content[content.length - 1]);
   }
-  content.push({ type: "text", text: seen.length
-    ? `Subtitles so far (up to ${stamp(now)}):\n${transcriptOf(seen)}`
-    : "No subtitles are available, so answer from the frame alone." });
+  const blocks = subtitleBlocks(seen, now);
+  blocks.forEach((b, i) => {
+    content.push({ type: "text", text: b.text });
+    if (b.ended && !(blocks[i + 1] && blocks[i + 1].ended)) cached(content[content.length - 1]);
+  });
+  if (!seen.length) content.push({ type: "text", text: "No subtitles are available, so go by the frame alone." });
+  const registry = characterRegistry(cues, cast, now);
+  content.push({ type: "text", text: `Characters established so far (from the subtitles up to ${stamp(now)}):\n` +
+    (registry.length ? registryText(registry) : "none yet") });
+  content.push({ type: "text", text: `Current position: ${stamp(now)}` });
   if (frameB64) content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: frameB64 } });
-  if (history && history.length) {
+  if (!xray && history && history.length) {
     content.push({ type: "text", text: `Earlier in this chat:\n${history.map((h) => `Q: ${h.q}\nA: ${h.a}`).join("\n\n")}` });
   }
-  content.push({ type: "text", text: question });
+  content.push({ type: "text", text: xray ? "X-Ray: who is in this scene?" : question });
   const openrouter = provider === "openrouter";
-  const body = { model: openrouter ? openRouterModel(model) : model, max_tokens: 16000, output_config: { effort },
+  const output_config = xray ? { effort, format: { type: "json_schema", schema: XRAY_SCHEMA } } : { effort };
+  const body = { model: openrouter ? openRouterModel(model) : model, max_tokens: 16000, output_config,
                  system: SYSTEM, messages: [{ role: "user", content }] };
   const headers = { "content-type": "application/json", "anthropic-version": "2023-06-01" };
   if (!openrouter && FALLBACK_MODELS.includes(model)) {
     body.fallbacks = "default";
     headers["anthropic-beta"] = "server-side-fallback-2026-07-01";
   }
-  return { url: PROVIDERS[openrouter ? "openrouter" : "anthropic"].url, body, headers,
+  return { url: PROVIDERS[openrouter ? "openrouter" : "anthropic"].url, body, headers, registry,
            transcript: transcriptOf(seen), cueCount: seen.length };
 };
 
@@ -271,19 +415,39 @@ const citationsIn = (text, cues, now) => {
   return out;
 };
 
-// USD per million tokens, input / output (claude-api reference, cached 2026-10-06).
+// --- the X-Ray ---------------------------------------------------------------------------------
+
+// The model's X-Ray JSON, with what comes from data rather than the model: the actor's photo, when
+// the character was first heard or named (from the registry, so never after `now`), and which of
+// the cited times are real lines. People in the frame first, then those speaking.
+const xrayPeople = (out, registry, heads, cues, now) => ((out && out.people) || [])
+  .map((p) => {
+    const known = (registry || []).find((r) => r.character === p.character || (p.actor && r.actor === p.actor));
+    const head = p.actor && (heads || []).find((h) => h.actor === p.actor);
+    const firstSeen = known && known.firstSeen <= now ? known.firstSeen : null;
+    return Object.assign({}, p, {
+      photo: head ? head.b64 : "",
+      firstSeen, firstAt: firstSeen == null ? "" : stamp(firstSeen),
+      citations: citationsIn(p.known_so_far, cues, now),
+    });
+  })
+  .sort((a, b) => Number(b.in_frame) - Number(a.in_frame) || Number(b.speaking_recently) - Number(a.speaking_recently));
+
+// USD per million tokens: input, output, cache read (claude-api reference, cached 2026-10-06).
+// Cache writes (5-minute) cost 1.25x input.
 const PRICES = {
-  "claude-opus-5-5": [4, 20],
-  "claude-sonnet-5-5": [2, 10],
-  "claude-haiku-5-5": [0.1, 0.5],
-  "claude-fable-5-1": [10, 50],
+  "claude-opus-5-5": [4, 20, 0.2],
+  "claude-sonnet-5-5": [2, 10, 0.2],
+  "claude-haiku-5-5": [0.1, 0.5, 0.01],
+  "claude-fable-5-1": [10, 50, 0.25],
 };
 // OpenRouter reports what it charged (`usage.cost`); otherwise the list price.
 const costUSD = (model, usage) => {
   if (usage && typeof usage.cost === "number") return usage.cost;
   const p = PRICES[model];
   if (!p || !usage) return null;
-  return ((usage.input_tokens || 0) * p[0] + (usage.output_tokens || 0) * p[1]) / 1e6;
+  return ((usage.input_tokens || 0) * p[0] + (usage.output_tokens || 0) * p[1] +
+          (usage.cache_creation_input_tokens || 0) * p[0] * 1.25 + (usage.cache_read_input_tokens || 0) * p[2]) / 1e6;
 };
 
 const answerText = (data) => ((data && data.content) || [])
@@ -292,5 +456,5 @@ const answerText = (data) => ((data && data.content) || [])
 module.exports = {
   parseSubs, cuesUpTo, speakerLabelCount, pickContextTrack, stamp, transcriptOf, parseRmsLevels, speechLag, agreedLag,
   cueShift, shiftCues, positionNow, tvReading, titleFromPath, castFromWikitext, namesOf,
-  unseenCastMentions, buildRequest, PROVIDERS, openRouterModel, providerOfKey, citationsIn, parseStamp, costUSD, answerText, PRICES, SYSTEM,
+  unseenCastMentions, characterRegistry, registryText, subtitleBlocks, buildRequest, XRAY_SCHEMA, xrayPeople, PROVIDERS, openRouterModel, providerOfKey, citationsIn, parseStamp, costUSD, answerText, PRICES, SYSTEM,
 };

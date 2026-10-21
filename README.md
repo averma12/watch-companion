@@ -4,14 +4,14 @@ Ask questions about the film you're watching, while you watch it, without spoile
 
 Watch Companion is a plugin for [IINA](https://iina.io), the macOS video player. Press ⌘K, ask
 "who is this?", "what did she just say?" or "what has happened so far?", and get an answer in
-the sidebar in a few seconds. Answers are built only from what you have already seen: the
-subtitles up to the current position, the current frame and the cast names. Nothing from later
-in the film is ever sent to the model.
+the sidebar in a few seconds, or press **X-Ray** to see who is in the scene. Answers are built
+only from what you have already seen: the subtitles up to the current position, the current
+frame and the cast. Nothing from later in the film is ever sent to the model.
 
 ```
   you ask ──► subtitles up to now ─┐
               current frame (768 px)├──► Claude ──► answer with citations [22:59]
-              cast names (Wikipedia)┘                (click a time to jump back there)
+              cast + photos (Wikipedia)┘             (click a time to jump back there)
 ```
 
 ## What it does
@@ -25,6 +25,15 @@ in the film is ever sent to the model.
   to jump back there, then "← Back". A time is linked only if a real subtitle line starts there
   and it isn't after your position. Background from the model's own knowledge is tagged
   `[background]`, and it is told never to use outside knowledge about this film's plot.
+- **X-Ray.** Press **X-Ray** in the sidebar (or **Plugin → X-Ray: who's in this scene**): a card
+  for each person in the scene, with the actor's photo, the character and the actor, whether
+  they are in the frame or speaking, one or two lines on what the film has shown about them so
+  far (with clickable times), and when the film first showed them. As on streaming services, a
+  cast member who is visible is named even before the film names the character.
+- **Knows who has appeared.** From the subtitles so far, the plugin works out which characters
+  the film has introduced, what they have been called, when they first appeared, and who spoke
+  in the last two minutes (SDH speaker labels help most). The model gets that list and the
+  actors' photos, so "who is this?" and "who said that?" land on the right person.
 - **Cast names, not plot.** The cast comes from the Cast section of the film's Wikipedia
   article: actor and character names only; the descriptions (which carry plot) are dropped. If
   an answer names a cast member who hasn't been mentioned yet, it is hidden behind
@@ -42,15 +51,18 @@ in the film is ever sent to the model.
   line, and "← Back" returns it.
 - **Follow-up questions.** The last six questions and answers go with each new one, so "now?"
   after "where are we?" is understood.
-- **Cost shown per answer.** Typically $0.02–0.10 with Claude Opus 5.5, depending on how far
-  into the film you are (more subtitles, more tokens). About 4–6 s per answer.
+- **Cost shown per answer.** With Claude Opus 5.5, about $0.01–0.05 for a question or an X-Ray
+  shortly after another one, and up to about $0.20 for the first one late in a film (more
+  subtitles, more tokens). The cast, the photos and the subtitles up to the last full ten
+  minutes are cached for five minutes, so follow-ups are cheap. About 5–12 s each.
 
 ## Privacy
 
 - The video file never leaves your Mac. Sent to Anthropic (or OpenRouter, if you use an
   OpenRouter key): the subtitle text up to now, one
-  downscaled frame (optional), the cast names and your question. Sent to Wikipedia: the film's
-  title and year, to look up the cast (optional). On a TV, the plugin only talks to tvcast on
+  downscaled frame (optional), the cast with the actors' photos, and your question. Sent to
+  Wikipedia: the film's title and year and the actors' names, to look up the cast and their
+  photos (optional; the photos come from wikimedia.org and are cached on your Mac). On a TV, the plugin only talks to tvcast on
   your own Mac (`127.0.0.1:8766`).
 - Your API key is stored in the macOS Keychain, not in files.
 
@@ -77,8 +89,8 @@ You need a Mac, about five minutes, and an Anthropic or OpenRouter API key.
    to the video (same name) or a text track inside it. For tracks inside the video, install
    [`ffmpeg`](https://ffmpeg.org) once: `brew install ffmpeg`.
 5. **Ask.** Press **⌘K** (or **Plugin → Show Plugins Panel**, then pick **Ask**), type a
-   question, press Enter. The first time, paste your API key when asked; it is stored in the
-   macOS Keychain.
+   question, press Enter, or press **X-Ray**. The first time, paste your API key when asked; it
+   is stored in the macOS Keychain.
 
 Settings (**Settings → Plugins → Watch Companion**): model (Opus 5.5 by default; Sonnet 5.5 and
 Haiku 5.5 are cheaper), provider (whichever key you have, Anthropic first; or Anthropic or
@@ -119,7 +131,8 @@ SDH tracks matter) are in [docs/DESIGN.md](docs/DESIGN.md). Agent and contributo
 `~/Library/Application Support/com.colliderli.iina/plugins/.data/com.averma12.watch-companion/autoask.json`
 and open a film: the plugin seeks to 10:00, asks through its own sidebar form, writes
 `autoask-result.json` and deletes the request. Each question costs real API money. Add
-`"subsShift": -5` to move the subtitles 5 s early first, to test the timing check.
+`"xray": true` to run the X-Ray there, `"subsShift": -5` to move the subtitles 5 s early first
+(to test the timing check), or `"frames": [600, 1800]` to save the frames a question would send.
 
 ## Roadmap
 
