@@ -35,6 +35,13 @@ in the film is ever sent to the model.
   Your subtitle delay in IINA is followed too. Lines are never moved earlier.
 - **Subtitles from anywhere in the file.** A `.srt`/`.vtt` beside the video, or a text track
   inside it (read once with `ffmpeg` and cached).
+- **Watching on a TV.** Cast the film to your TV with [tvcast](https://github.com/thepushkarp/tvcast)
+  and keep it open in IINA on the Mac. While the TV plays that file, the plugin takes the
+  position from the TV (the sidebar says "position from TV"), keeps IINA paused, muted and on
+  the TV's scene, and takes the frame from there. Clicking a citation jumps the TV back to that
+  line, and "← Back" returns it.
+- **Follow-up questions.** The last six questions and answers go with each new one, so "now?"
+  after "where are we?" is understood.
 - **Cost shown per answer.** Typically $0.02–0.10 with Claude Opus 5.5, depending on how far
   into the film you are (more subtitles, more tokens). About 4–6 s per answer.
 
@@ -42,7 +49,8 @@ in the film is ever sent to the model.
 
 - The video file never leaves your Mac. Sent to Anthropic: the subtitle text up to now, one
   downscaled frame (optional), the cast names and your question. Sent to Wikipedia: the film's
-  title and year, to look up the cast (optional).
+  title and year, to look up the cast (optional). On a TV, the plugin only talks to tvcast on
+  your own Mac (`127.0.0.1:8766`).
 - Your Anthropic API key is stored in the macOS Keychain, not in files.
 
 ## Quick start
@@ -73,9 +81,13 @@ Settings (**Settings → Plugins → Watch Companion**): model (Opus 5.5 by defa
 Haiku 5.5 are cheaper), effort, whether to send the frame, whether to look up the cast, and an
 optional env file to import `ANTHROPIC_API_KEY` from instead of pasting it.
 
+**On a TV:** start tvcast's daemon, play the film on the TV with it (`tv open <title>`), and open
+the same file in IINA. Within a few seconds the sidebar shows "position from TV". Then ask as
+usual from the Mac.
+
 Limits today: text subtitles only (not image-based PGS/VobSub; without subtitles it answers
-from the frame alone), English Wikipedia for the cast, and watching inside IINA (not on a TV
-yet).
+from the frame alone), English Wikipedia for the cast, and on a TV only a local file cast with
+tvcast (not streaming apps, not other casting tools).
 
 ## Develop
 
@@ -107,10 +119,10 @@ and open a film: the plugin seeks to 10:00, asks through its own sidebar form, w
 
 ## Roadmap
 
-- **Watching on a TV.** Find the position when the film plays on the TV instead of in IINA:
-  from the casting tool, or by listening with ShazamKit against a catalog built from the film's
-  audio track that plays (prototype in [helpers/listener](helpers/listener); first measurements in
-  [docs/DESIGN.md](docs/DESIGN.md)). Ask from a phone page instead of the Mac's sidebar.
+- **More ways to watch on a TV.** Listening with ShazamKit as a check on the TV's position, and
+  for players that don't report one (prototype in [helpers/listener](helpers/listener);
+  measurements in [docs/DESIGN.md](docs/DESIGN.md)). Ask from a phone page instead of the Mac's
+  sidebar, or by voice.
 - **Spoiler-safe web search** for background questions (the actor's other films, the comics),
   limited to pages published before the film's release.
 - The last few seconds as several frames, for "what just happened?".

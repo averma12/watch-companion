@@ -221,3 +221,25 @@ test("spoiler guard with subtitles that run early", () => {
   const sent = JSON.stringify(ctx.buildRequest({ model: "claude-opus-5-5", effort: "low", cues: shifted, now: 598, question: "?" }).body);
   assert.ok(!sent.includes("Owen Hale is the Warden."));  // spoken at 600, early file says 595
 });
+
+test("tvReading: the TV's position, only for this file while it plays or is paused", () => {
+  const status = (file, state, position) => ({ now: { file }, tv: { state, position } });
+  const path = "/films/Big.Buck.Bunny.2008.mkv";
+  assert.deepEqual(ctx.tvReading(status("Big.Buck.Bunny.2008.mkv", "PLAYING", 2513), path), { seconds: 2513, playing: true });
+  assert.deepEqual(ctx.tvReading(status("Big.Buck.Bunny.2008.mkv", "PAUSED_PLAYBACK", 61), path), { seconds: 61, playing: false });
+  assert.equal(ctx.tvReading(status("Sintel.2010.mkv", "PLAYING", 61), path), null);        // another film
+  assert.equal(ctx.tvReading(status("Big.Buck.Bunny.2008.mkv", "STOPPED", 0), path), null);
+  assert.equal(ctx.tvReading(status("Big.Buck.Bunny.2008.mkv", "NO_MEDIA_PRESENT", 0), path), null);
+  assert.equal(ctx.tvReading(status("Big.Buck.Bunny.2008.mkv", "PLAYING", null), path), null);
+  assert.equal(ctx.tvReading({ now: null, tv: { state: "PLAYING", position: 5 } }, path), null);
+  assert.equal(ctx.tvReading(null, path), null);                                          // tvcast not running
+});
+
+test("spoiler guard with the TV as the position source", async () => {
+  const cues = ctx.parseSubs(SRT);
+  const reading = ctx.tvReading({ now: { file: "x.mkv" }, tv: { state: "PLAYING", position: 61 } }, "/m/x.mkv");
+  const now = await ctx.positionNow({ label: "TV", now: () => reading });
+  const sent = JSON.stringify(ctx.buildRequest({ model: "claude-opus-5-5", effort: "low", cues, now, question: "?" }).body);
+  assert.ok(sent.includes("TJ, wait!"));
+  assert.ok(!sent.includes("Owen Hale is the Warden."));
+});
