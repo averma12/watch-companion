@@ -1,5 +1,5 @@
-// Pure functions: subtitles, cast, the request to Claude and its cost. No `iina` here, so the
-// spoiler guard can be tested with plain node (iina-plugin/test/).
+// Pure functions: subtitles, the position, cast, the request to Claude and its cost. No `iina`
+// here, so the spoiler guard can be tested with plain node (iina-plugin/test/).
 
 // --- subtitles -------------------------------------------------------------------------------
 
@@ -53,6 +53,22 @@ const stamp = (s) => {
 };
 
 const transcriptOf = (cues) => cues.map((c) => `[${stamp(c.start)}] ${c.text}`).join("\n");
+
+// --- position --------------------------------------------------------------------------------
+
+// Where the viewer is comes from a position source: { name, label, now() }, where now() returns
+// (or resolves to) { seconds }. In IINA that is mpv's clock; when the film plays on a TV it will be
+// the casting tool or listening. The subtitle cutoff, the citations and the seek clamp all take
+// their time from one reading per question, never from the player directly.
+// A reading that isn't a usable time is an error, not 0 or a guess.
+const positionNow = async (source) => {
+  const reading = await source.now();
+  const s = reading && reading.seconds;
+  if (typeof s !== "number" || !Number.isFinite(s) || s < 0) {
+    throw new Error(`Couldn't tell where you are in the film (position from ${source.label}).`);
+  }
+  return s;
+};
 
 // --- film and cast -------------------------------------------------------------------------
 
@@ -184,6 +200,6 @@ const answerText = (data) => ((data && data.content) || [])
   .filter((b) => b.type === "text").map((b) => b.text).join("").trim();
 
 module.exports = {
-  parseSubs, cuesUpTo, speakerLabelCount, pickContextTrack, stamp, transcriptOf, titleFromPath, castFromWikitext, namesOf,
+  parseSubs, cuesUpTo, speakerLabelCount, pickContextTrack, stamp, transcriptOf, positionNow, titleFromPath, castFromWikitext, namesOf,
   unseenCastMentions, buildRequest, citationsIn, parseStamp, costUSD, answerText, PRICES, SYSTEM,
 };
