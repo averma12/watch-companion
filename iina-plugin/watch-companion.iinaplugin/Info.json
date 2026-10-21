@@ -1,7 +1,7 @@
 {
   "name": "Watch Companion",
   "identifier": "com.averma12.watch-companion",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Ask questions about the scene you are watching. Answers come from the subtitles so far, the current frame and the cast, never from later in the film.",
   "author": {
     "name": "Abhinav Verma",
@@ -9,7 +9,7 @@
   },
   "entry": "main.js",
   "ghRepo": "averma12/watch-companion",
-  "ghVersion": 2,
+  "ghVersion": 3,
   "permissions": [
     "show-osd",
     "file-system",

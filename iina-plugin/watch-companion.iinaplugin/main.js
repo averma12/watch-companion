@@ -201,7 +201,7 @@ const checkSubtitleSync = async (fresh) => {
 const wikiGet = async (params) => {
   const q = Object.keys(params).map((k) => `${k}=${encodeURIComponent(params[k])}`).join("&");
   const r = await http.get(`https://en.wikipedia.org/w/api.php?${q}&format=json&formatversion=2`,
-    { headers: { "User-Agent": "watch-companion/0.2 (https://github.com/averma12/watch-companion)" } });
+    { headers: { "User-Agent": "watch-companion/0.3 (https://github.com/averma12/watch-companion)" } });
   return typeof r.data === "string" ? JSON.parse(r.data) : r.data;
 };
 
